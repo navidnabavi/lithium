@@ -82,11 +82,13 @@ fn xaccel_redirect(internal_url: String) -> IronResult<Response>{
 }
 
 fn main(){
-    let cache_controller = CacheController::new();
+    let mut cache_controller = CacheController::new();
     // let cache_controller = Arc::new(Mutex::new(CacheController::new()));
     let mut chain = Chain::new(handler);
     chain.link(Write::<AccessCache>::both(cache_controller));
     // chain.link((cache_controller.clone(),cache_controller.clone()));
+
+
     Iron::new(chain).http("0.0.0.0:9999").unwrap();
 
 }
