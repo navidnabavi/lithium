@@ -11,7 +11,7 @@ use std::sync::mpsc::{Sender,Receiver};
 use std::sync::mpsc::channel;
 use std::fs::remove_file;
 
-#[derive(Debug,RustcEncodable, RustcDecodable)]
+#[derive(Debug)]
 struct TimeUrl{
     url : String,
     time: u64, //unix timestamp
@@ -44,7 +44,7 @@ impl TimeUrl  {
     }
 }
 
-#[derive(Debug,RustcEncodable, RustcDecodable)]
+#[derive(Debug)]
 pub enum HitMiss {
     Hit,
     Miss,
@@ -61,29 +61,29 @@ pub struct CacheController {
     // time_limit: u64,
     soft_limit_ratio : f64,
     sweep_time: usize,
-    max_delete_per_iteration: usize
+    max_delete_per_iteration: usize,
 }
 
 impl CacheController{
     pub fn new() -> CacheController{
-        let mut ret = CacheController {
+        let ret = CacheController {
             urls: BTreeMap::new(),
             url_map : HashMap::new(),
             size: 0,
             mutex: Arc::new(Mutex::new(false)),
             // time_limit : u64::MAX,
-            size_limit: usize::MAX,
+            size_limit: 100000,
             soft_limit_ratio : 0.85,
-            sweep_time : 5 * 60,
-            max_delete_per_iteration: 100
+            sweep_time : 10,
+            max_delete_per_iteration: 100,
         };
+
+
         return ret;
     }
 
     #[allow(dead_code)]
     pub fn access(&mut self,url: &str) -> HitMiss {
-        let mutex = self.mutex.clone();
-        let lock = mutex.lock().unwrap();
 
         let is_some = self.url_map.get(url).is_some();
         if is_some {
@@ -130,8 +130,9 @@ impl CacheController{
     }
 
     pub fn download_done(&mut self,url: &str,size: usize){
-        let mutex = self.mutex.clone();
-        let lock = mutex.lock().unwrap();
+        // let mutex = self.mutex.clone();
+        // let lock = mutex.lock().unwrap();
+
 
         let mut url_data = self.url_map.get_mut(url);
         if let Some(v) = url_data {
@@ -140,6 +141,7 @@ impl CacheController{
         } else {
             println!("unexpected!");
         }
+
     }
 
     pub fn set_size_limit(&mut self){
@@ -160,50 +162,51 @@ impl CacheController{
             println!("{:?}", i);
         }
     }
-
-
-    fn persist(&self) -> Result<(),()>{
-        // for url in self.url_map{
-        //
-        // }
-        Err(())
-    }
-
-    fn load() -> Result<CacheController,()> {
-        Err(())
-    }
+    //
+    //
+    // fn persist(&self) -> Result<(),()>{
+    //     // for url in self.url_map{
+    //     //
+    //     // }
+    //     Err(())
+    // }
+    //
+    // fn load() -> Result<CacheController,()> {
+    //     Err(())
+    // }
 
     fn sweep(&mut self, file_deleter : &Sender<String>) -> usize {
-
-        if self.soft_limit_passed() {
-            self.sweep_one_level(self.max_delete_per_iteration)
+        let max_delete = self.max_delete_per_iteration;
+        let mut i=0;
+        while i < max_delete && self.soft_limit_passed() {
+            self.sweep_once(file_deleter);
+            i += 1;
         }
         self.sweep_time
     }
-    fn sweep_one_level(&mut self,num: usize){
-        let mut key: Option<u64> = None ;
-        let mut url: Option<String> = None;
 
-        for i in 0..num:
-        {
-            {
-                let t = self.urls.iter().nth(0);
-                if let Some(u) = t {
-                    key = Some(*u.0);
-                    url = Some(u.1.to_owned());
-                }
-            }
-            if key.is_some() {
-                let url_key = url.as_ref().unwrap();
-                self.urls.remove(key.as_ref().unwrap());
-                let time_url = self.url_map.get(url_key).unwrap();
-                let size = time_url.size;
-                self.url_map.remove(url_key);
-
-                self.size -= size;
-                if ! self.soft_limit_passed() {break}
-            }
+    fn get_oldest(&mut self)-> Option<(u64,String)>{
+        let time_url =self.urls.iter().nth(0);
+        if let Some(time_url_value) = time_url {
+            let _time = *time_url_value.0;
+            let _url = time_url_value.1.to_owned();
+            return Some((_time,_url));
         }
+        return None
+    }
+
+    fn sweep_once(&mut self,file_deleter: &Sender<String>){
+        let time_url = self.get_oldest();
+        if let Some((time,url)) = time_url {
+            let size = self.url_map.get(&url).unwrap().size; //TODO: Check for error
+            self.size -= size;
+            file_deleter.send(url.to_owned());
+            self.url_map.remove(&url);
+            self.urls.remove(&time);
+            println!("Attemp to remove {}", url);
+        };
+
+
     }
 
     pub fn soft_limit_passed(&self) -> bool {
@@ -215,26 +218,28 @@ impl CacheController{
     }
 
 }
+//
+// impl Drop for CacheController {
+//     fn drop(&mut self){
+//
+//     }
+// }
 
-impl Drop for CacheController {
-    fn drop(&mut self){
-
-    }
-}
-
-struct Sweeper {
+pub struct Sweeper {
     sweeper_handle : JoinHandle<()>,
     file_deleter_handle : JoinHandle<()>,
 }
 
 impl Sweeper {
-    fn new(cache_controller :Mutex<CacheController>) -> Sweeper {
+    pub fn new(cache_controller :Arc<Mutex<CacheController>>,base_dir: String) -> Sweeper {
         let (tx,_rx) = channel();
 
         let sweeper_handle = thread::spawn(move ||{
+                println!("Sweeper thread has been started");
                 let delete_channel = tx;
                 loop {
                     let mut mutex = cache_controller.lock().unwrap();
+                    println!("sweeping once");
                     let delay = mutex.sweep(&delete_channel);
                     drop(mutex);
                     thread::sleep(Duration::from_secs(delay as u64))
@@ -244,9 +249,13 @@ impl Sweeper {
 
 
         let file_deleter_handle = thread::spawn(move ||{
+                println!("File deleter thread has been started");
                 let rx = _rx;
-                while let Ok(message) = rx.try_recv() {
-                    remove_file(message);
+                while let Ok(message) = rx.recv() {
+                    let file_path = format!("{}{}",base_dir,message);
+                    println!("deleting  file {:?}", file_path);
+
+                    remove_file(file_path);
                 }
 
             }
@@ -258,9 +267,8 @@ impl Sweeper {
         }
     }
 
-    fn join(&mut self){
-        self.file_deleter_handle.join();
-        self.sweeper_handle.join();
+    pub fn join(& self){
+        // self.file_deleter_handle.join();
     }
 }
 

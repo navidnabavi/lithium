@@ -4,9 +4,7 @@ use std::io::BufWriter;
 use std::io::prelude::*;
 use std::path::Path;
 use std::fs::remove_file;
-// use hyper::Client;
 use hyper::client::*;
-
 
 pub fn download_file(url: &str,filename: &str) -> Result<usize,()> {
     let  client = Client::new();
@@ -43,14 +41,13 @@ pub fn download_file(url: &str,filename: &str) -> Result<usize,()> {
                 println!("{:?}", size);
                 size_all += size;
             },
-            Err(_) => {
+            Err(err) => {
                 drop(writer);
                 remove_file(filename);
-                
+                println!("{:?}",err );
                 return Err(());
             }
         }
     }
-
 
 }

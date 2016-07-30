@@ -1,16 +1,11 @@
 [package]
 name = "Lithium"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Navid <navid92@gmail.com>"]
-
 
 [dependencies]
 time = "*"
 hyper = "0.8.1"
-persistent = "0.0.6"
-rustc-serialize = "*"
-bincode = "*"
-
 
 [dependencies.iron]
-version="*"
+version="0.3.0"
