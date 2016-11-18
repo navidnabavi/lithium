@@ -1,13 +1,13 @@
 extern crate time;
 use std::sync::{Mutex,Arc};
-use std::collections::{LinkedList,HashMap};
+use std::collections::{HashMap};
 use std::u64;
 use std::usize;
 use std::thread::JoinHandle;
 use std::thread;
-use std::time::{SystemTime,Duration};
+use std::time::{Duration};
 use std::collections::BTreeMap;
-use std::sync::mpsc::{Sender,Receiver};
+use std::sync::mpsc::{Sender};
 use std::sync::mpsc::channel;
 use std::fs::remove_file;
 
@@ -20,12 +20,9 @@ struct TimeUrl{
 
 type TimeUrlRef = Box<TimeUrl>;
 
-
-
 fn now() -> u64 {
     time::precise_time_ns()
 }
-
 
 impl TimeUrl  {
     fn new(url: String) -> TimeUrlRef {
@@ -74,7 +71,6 @@ impl CacheController{
             max_delete_per_iteration: 100,
         };
 
-
         return ret;
     }
 
@@ -100,7 +96,7 @@ impl CacheController{
     }
 
     fn update(&mut self, url: &str) -> HitMiss {
-        let mut value = self.url_map.get_mut(url);
+        let value = self.url_map.get_mut(url);
         if let Some(v) = value {
             match v.size {
                 0 => return HitMiss::Downloading,
@@ -124,14 +120,13 @@ impl CacheController{
 
     pub fn download_done(&mut self,url: &str,size: usize){
 
-        let mut url_data = self.url_map.get_mut(url);
+        let url_data = self.url_map.get_mut(url);
         if let Some(v) = url_data {
             v.size = size;
             self.size += v.size;
         } else {
             println!("unexpected!");
         }
-
     }
 
     pub fn set_size_limit(&mut self){
@@ -190,7 +185,6 @@ impl CacheController{
     pub fn soft_limit_passed(&self) -> bool {
         self.size  > (self.size_limit as f64 * self.soft_limit_ratio) as usize
     }
-
     pub fn hard_limit_passed(&self) -> bool {
         self.size > self.size_limit
     }

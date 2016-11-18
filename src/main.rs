@@ -13,22 +13,20 @@ use download::*;
 // use downloader::Downloader;
 
 static base_url: &'static str = "https://divar.ir";
-static base_dir: &'static str = "/home/navid/cache";
+static base_dir: &'static str = "/home/navid/cdn";
 
 
 
 header! {
-    (X_Accel_Redirect,"X-Accel-Redirect") => [String]
+    (XAccelRedirect,"X-Accel-Redirect") => [String]
 }
-
 
 fn handler(req: &mut Request)-> IronResult<Response> {
 
     let url = req.url.path.iter()
              .fold(String::new(),|a,b| a + "/" + b);
 
-
-    let xaccel_uri : String = format!("files{}",url);
+    let xaccel_uri : String = format!("/files{}",url);
 
     {
         let mutex = req.extensions.get::<SharedCache>().unwrap();
@@ -65,7 +63,8 @@ fn handler(req: &mut Request)-> IronResult<Response> {
 
 fn xaccel_redirect(internal_url: String) -> IronResult<Response>{
     let mut res = Response::with(status::Ok);
-    res.headers.set(X_Accel_Redirect(internal_url));
+    res.headers.set(XAccelRedirect(internal_url.clone()));
+    println!("{:?}",internal_url);
     Ok(res)
 }
 
@@ -89,7 +88,7 @@ fn main(){
     let cache_controller = Arc::new(Mutex::new(CacheController::new()));
     let sweeper = Sweeper::new(cache_controller.clone(),base_dir.to_string());
     let mut chain = Chain::new(handler);
-   
+
     chain.link_before(CacheMiddleware{cache_controller: cache_controller});
 
     Iron::new(chain).http("0.0.0.0:9999").unwrap();

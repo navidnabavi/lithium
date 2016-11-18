@@ -14,7 +14,7 @@ pub fn download_file(url: &str,filename: &str) -> Result<usize,()> {
     let parent: &Path = path.parent().unwrap();
 
     create_dir_all(parent.to_str().unwrap()).unwrap();
-    // println!("{:?}", save_path);
+    
     let mut res = client.get(url).send().unwrap();
     let file = match File::create(filename.to_owned()) {
         Ok(file) => file,
@@ -22,9 +22,7 @@ pub fn download_file(url: &str,filename: &str) -> Result<usize,()> {
     };
 
     let mut writer = BufWriter::new(file);
-    // let mut size = 0usize;
-    // let t: Option<Header> = res.headers.get();
-
+    
     let mut buffer :[u8;10240] = [0;10240];
     let mut size_all = 0usize;
     loop {
