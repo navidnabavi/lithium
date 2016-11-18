@@ -22,12 +22,8 @@ header! {
 }
 
 
-
-
 fn handler(req: &mut Request)-> IronResult<Response> {
 
-    // let base_url = String::from("");
-    // let base_dir = String::from("");
     let url = req.url.path.iter()
              .fold(String::new(),|a,b| a + "/" + b);
 
@@ -63,11 +59,6 @@ fn handler(req: &mut Request)-> IronResult<Response> {
         }
     }
 
-    // let bytes =  xaccel_uri.as_mut_vec();
-
-    // let () = v;
-    // let h = Headers::new();
-    // h.set(X_Accel_Redirect("/dasdsad/sadsad".to_owned()));
     println!("{:?}", xaccel_uri);
     return xaccel_redirect(xaccel_uri);
 }
@@ -95,18 +86,12 @@ impl BeforeMiddleware for CacheMiddleware {
 }
 
 fn main(){
-    // let mut cache_controller = CacheController::new();
     let cache_controller = Arc::new(Mutex::new(CacheController::new()));
     let sweeper = Sweeper::new(cache_controller.clone(),base_dir.to_string());
     let mut chain = Chain::new(handler);
-    // let write : (Write<AccessCache>,Write<AccessCache>) = Write::<AccessCache>::both(cache_controller);
-    // let t : Write<AccessCache> = write.0;
-    // let data = t.data.clone();
-    // chain.link(write);
+   
     chain.link_before(CacheMiddleware{cache_controller: cache_controller});
 
-    // chain.link((cache_controller.clone(),cache_controller.clone()));
-    // let mut sweeper = Sweeper::new(chain);
     Iron::new(chain).http("0.0.0.0:9999").unwrap();
     sweeper.join();
 }

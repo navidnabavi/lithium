@@ -30,7 +30,6 @@ fn now() -> u64 {
 impl TimeUrl  {
     fn new(url: String) -> TimeUrlRef {
         let _ref =
-        // Rc::new(
             Box::new(
                 TimeUrl
                 {
@@ -38,7 +37,6 @@ impl TimeUrl  {
                     time : now(),
                     size : 0
                 }
-            // )
         );
         return _ref;
     }
@@ -58,7 +56,6 @@ pub struct CacheController {
     size : usize,
     mutex: Arc<Mutex<bool>>,
     size_limit: usize,
-    // time_limit: u64,
     soft_limit_ratio : f64,
     sweep_time: usize,
     max_delete_per_iteration: usize,
@@ -71,7 +68,6 @@ impl CacheController{
             url_map : HashMap::new(),
             size: 0,
             mutex: Arc::new(Mutex::new(false)),
-            // time_limit : u64::MAX,
             size_limit: 100000,
             soft_limit_ratio : 0.85,
             sweep_time : 10,
@@ -87,15 +83,12 @@ impl CacheController{
 
         let is_some = self.url_map.get(url).is_some();
         if is_some {
-            // println!("{:?}", data);
             let state = self.update(url);
             return state;
 
         } else {
             self.push(url);
         }
-        // thread::sleep_ms(1000);
-
         HitMiss::Miss
     }
 
@@ -130,9 +123,6 @@ impl CacheController{
     }
 
     pub fn download_done(&mut self,url: &str,size: usize){
-        // let mutex = self.mutex.clone();
-        // let lock = mutex.lock().unwrap();
-
 
         let mut url_data = self.url_map.get_mut(url);
         if let Some(v) = url_data {
@@ -162,18 +152,6 @@ impl CacheController{
             println!("{:?}", i);
         }
     }
-    //
-    //
-    // fn persist(&self) -> Result<(),()>{
-    //     // for url in self.url_map{
-    //     //
-    //     // }
-    //     Err(())
-    // }
-    //
-    // fn load() -> Result<CacheController,()> {
-    //     Err(())
-    // }
 
     fn sweep(&mut self, file_deleter : &Sender<String>) -> usize {
         let max_delete = self.max_delete_per_iteration;
@@ -218,12 +196,6 @@ impl CacheController{
     }
 
 }
-//
-// impl Drop for CacheController {
-//     fn drop(&mut self){
-//
-//     }
-// }
 
 pub struct Sweeper {
     sweeper_handle : JoinHandle<()>,
@@ -268,7 +240,6 @@ impl Sweeper {
     }
 
     pub fn join(& self){
-        // self.file_deleter_handle.join();
     }
 }
 
