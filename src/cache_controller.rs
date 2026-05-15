@@ -1,12 +1,11 @@
+use crate::backend::StorageBackend;
 use crate::error::{LithiumError, Result};
 use std::sync::{Arc, RwLock, Mutex};
 use std::collections::{HashMap, BTreeMap, HashSet};
-use std::thread::{JoinHandle, spawn};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::sync::mpsc::{Sender, channel};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::fs;
-use std::path::PathBuf;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::task::JoinHandle;
 use tracing::{info, error, debug};
 
 #[derive(Debug, Clone)]
@@ -186,7 +185,7 @@ impl CacheController {
         }
     }
 
-    fn sweep(&mut self, file_deleter: &Sender<String>) -> u64 {
+    fn sweep(&mut self, file_deleter: &UnboundedSender<String>) -> u64 {
         let max_delete = self.max_delete_per_iteration;
         let mut deleted = 0;
         
@@ -209,7 +208,7 @@ impl CacheController {
         self.urls.iter().next().map(|((time, url), _)| (*time, url.clone()))
     }
 
-    fn sweep_once(&mut self, file_deleter: &Sender<String>) -> bool {
+    fn sweep_once(&mut self, file_deleter: &UnboundedSender<String>) -> bool {
         if let Some((time, url)) = self.get_oldest() {
             if let Some(time_url) = self.url_map.get(&url) {
                 let size = time_url.size;
@@ -250,44 +249,42 @@ pub struct Sweeper {
 }
 
 impl Sweeper {
-    pub fn new(cache_controller: Arc<RwLock<CacheController>>, base_dir: PathBuf, stop: Arc<AtomicBool>) -> Self {
-        let (tx, rx) = channel();
+    pub fn new(
+        cache_controller: Arc<RwLock<CacheController>>,
+        backend: Arc<dyn StorageBackend>,
+        stop: Arc<AtomicBool>,
+    ) -> Self {
+        let (tx, mut rx) = unbounded_channel::<String>();
 
         let stop_sweeper = stop.clone();
-        let sweeper_handle = spawn(move || {
-            info!("Sweeper thread started");
-            let delete_channel = tx;
+        let sweeper_handle = tokio::spawn(async move {
+            info!("Sweeper task started");
             while !stop_sweeper.load(Ordering::Relaxed) {
-                let delay = {
-                    match cache_controller.write() {
-                        Ok(mut cache) => cache.sweep(&delete_channel),
-                        Err(e) => {
-                            error!("Failed to acquire cache lock in sweeper: {}", e);
-                            60
-                        }
+                let delay_secs = match cache_controller.write() {
+                    Ok(mut cache) => cache.sweep(&tx),
+                    Err(e) => {
+                        error!("Failed to acquire cache lock in sweeper: {}", e);
+                        60
                     }
                 };
-                // Sleep in 100ms increments so stop flag is checked frequently
+                // Sleep in 100ms increments to check stop flag frequently
                 let mut elapsed = 0u64;
-                while elapsed < delay * 1000 && !stop_sweeper.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(100));
+                while elapsed < delay_secs * 1000 && !stop_sweeper.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     elapsed += 100;
                 }
             }
-            info!("Sweeper thread stopped");
+            info!("Sweeper task stopped");
         });
 
-        let file_deleter_handle = spawn(move || {
-            info!("File deleter thread started");
-            while let Ok(message) = rx.recv() {
-                let file_path = base_dir.join(&message);
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete file {}: {}", file_path.display(), e);
-                } else {
-                    info!("Deleted file: {}", file_path.display());
+        let file_deleter_handle = tokio::spawn(async move {
+            info!("File deleter task started");
+            while let Some(path) = rx.recv().await {
+                if let Err(e) = backend.delete(&path).await {
+                    error!("Failed to delete {}: {}", path, e);
                 }
             }
-            info!("File deleter thread stopped");
+            info!("File deleter task stopped");
         });
 
         Self {
@@ -296,9 +293,9 @@ impl Sweeper {
         }
     }
 
-    pub fn join(self) {
-        let _ = self.sweeper_handle.join();
-        let _ = self.file_deleter_handle.join();
+    pub async fn join(self) {
+        let _ = self.sweeper_handle.await;
+        let _ = self.file_deleter_handle.await;
     }
 }
 
@@ -337,7 +334,7 @@ mod tests {
         cache.download_done("file1", 60).unwrap(); // over soft limit (100 * 0.5 = 50)
 
         // Create a channel then drop receiver immediately — send will fail
-        let (tx, _rx) = std::sync::mpsc::channel::<String>();
+        let (tx, _rx) = unbounded_channel::<String>();
         drop(_rx);
 
         let result = cache.sweep_once(&tx);
