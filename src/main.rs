@@ -1,166 +1,96 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::get,
-    Router,
-    response::IntoResponse,
-};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tower_http::trace::TraceLayer;
-use std::sync::RwLock;
-
+extern crate iron;
+#[macro_use] extern crate hyper;
+use std::sync::{Mutex,Arc};
+use iron::prelude::*;
+use iron::status;
+use iron::BeforeMiddleware;
+use iron::typemap::Key;
 mod cache_controller;
-mod download;
-mod config;
-mod error;
-
 use cache_controller::*;
+
+mod download;
 use download::*;
-use config::*;
-use error::*;
+// use downloader::Downloader;
+
+static base_url: &'static str = "https://divar.ir";
+static base_dir: &'static str = "/home/navid/cdn";
 
 
 
-#[derive(Clone)]
-struct AppState {
-    cache_controller: Arc<RwLock<CacheController>>,
-    config: Config,
-    client: reqwest::Client,
+header! {
+    (XAccelRedirect,"X-Accel-Redirect") => [String]
 }
 
-async fn handler(
-    Path(path): Path<String>,
-    State(state): State<AppState>,
-) -> Result<axum::response::Response> {
-    let path = format!("/{}", path);
-    let xaccel_uri = format!("/files{}", path);
-    
-    // Check cache
-    let cache_result = {
-        let mut cache = state.cache_controller.write()
-            .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
-        cache.access(&path)
-    };
-    
-    match cache_result {
-        HitMiss::Hit => {
-            tracing::info!("Cache hit for {}", path);
-            return Ok(xaccel_redirect(&xaccel_uri));
-        }
-        HitMiss::Downloading => {
-            tracing::info!("File still downloading for {}", path);
-            return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                [("Retry-After", "1")],
-            ).into_response());
-        }
-        HitMiss::Miss => {
-            tracing::info!("Cache miss for {}", path);
+fn handler(req: &mut Request)-> IronResult<Response> {
+
+    let url = req.url.path.iter()
+             .fold(String::new(),|a,b| a + "/" + b);
+
+    let xaccel_uri : String = format!("/files{}",url);
+
+    {
+        let mutex = req.extensions.get::<SharedCache>().unwrap();
+        let mut cache_controller = mutex.lock().unwrap();
+        match cache_controller.access(url.as_ref()) {
+            HitMiss::Downloading => {/*wait!!!*/},
+            HitMiss::Hit => {
+                println!("hit {:?}",url);
+                return xaccel_redirect(xaccel_uri)},
+            _ => {println!("miss {:?}", url);}
         }
     }
-    
-    // Download file
-    let download_url = format!("{}{}", state.config.base_url, path);
-    let download_path = state.config.base_dir.join(&path);
-    
-    match download_file(&state.client, &download_url, &download_path.to_string_lossy()).await {
-        Ok(size) => {
-            let mut cache = state.cache_controller.write()
-                .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
-            if let Err(e) = cache.download_done(&path, size) {
-                tracing::error!("Failed to update cache: {}", e);
-                cache.download_failed(&path);
-                return Err(e);
-            }
-            cache.dump();
-        }
-        Err(e) => {
-            tracing::error!("Download failed for {}: {}", path, e);
-            let mut cache = state.cache_controller.write()
-                .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
-            cache.download_failed(&path);
-            return Err(e);
+    println!("downloading");
+
+    let download_url = base_url.to_string() + url.as_ref();
+    let download_save_file :String = base_dir.to_string() + url.as_ref();
+
+    {
+        let download_result =  download_file(download_url.as_ref(),download_save_file.as_ref());
+        let mutex = req.extensions.get::<SharedCache>().unwrap();
+        let mut cache_controller = mutex.lock().unwrap();
+        if let Ok(size) = download_result{
+            cache_controller.download_done(url.as_ref(),size);
+            cache_controller.dump();
+        } else {
+            cache_controller.remove(url.as_ref());
+            println!("fatal error");
         }
     }
-    
-    Ok(xaccel_redirect(&xaccel_uri))
+
+    println!("{:?}", xaccel_uri);
+    return xaccel_redirect(xaccel_uri);
 }
 
-fn xaccel_redirect(internal_url: &str) -> axum::response::Response {
-    (StatusCode::OK, [("X-Accel-Redirect", internal_url.to_string())]).into_response()
+fn xaccel_redirect(internal_url: String) -> IronResult<Response>{
+    let mut res = Response::with(status::Ok);
+    res.headers.set(XAccelRedirect(internal_url.clone()));
+    println!("{:?}",internal_url);
+    Ok(res)
 }
 
-impl IntoResponse for LithiumError {
-    fn into_response(self) -> axum::response::Response {
-        let (status, message) = match self {
-            LithiumError::Download { message } => (StatusCode::BAD_GATEWAY, message),
-            LithiumError::Http(_) => (StatusCode::BAD_GATEWAY, "HTTP error".to_string()),
-            LithiumError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error".to_string()),
-            LithiumError::PathTraversal { path } => (StatusCode::BAD_REQUEST, format!("Path traversal detected: {}", path)),
-            LithiumError::InvalidPath { path } => (StatusCode::BAD_REQUEST, format!("Invalid path: {}", path)),
-            LithiumError::Cache { message } => (StatusCode::INTERNAL_SERVER_ERROR, message),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
-        };
-        
-        (status, message).into_response()
+struct SharedCache;
+impl Key for SharedCache {
+    type Value = Arc<Mutex<CacheController>>;
+}
+
+struct CacheMiddleware{
+    cache_controller : Arc<Mutex<CacheController>>
+}
+
+impl BeforeMiddleware for CacheMiddleware {
+    fn before(&self, req: &mut Request) -> IronResult<()>{
+        req.extensions.insert::<SharedCache>(self.cache_controller.clone());
+        Ok(())
     }
 }
 
-#[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
-    
-    // Load configuration
-    let config = Config::load()?;
-    tracing::info!("Loaded configuration: {:?}", config);
-    
-    // Create cache controller
-    let cache_controller = Arc::new(RwLock::new(CacheController::new(
-        config.cache.size_limit,
-        config.cache.soft_limit_ratio,
-        config.cache.sweep_interval_secs,
-        config.cache.max_delete_per_iteration,
-        config.cache.max_file_size,
-    )));
-    
-    // Create sweeper
-    let stop = Arc::new(AtomicBool::new(false));
-    let sweeper = Sweeper::new(cache_controller.clone(), config.base_dir.clone(), stop.clone());
+fn main(){
+    let cache_controller = Arc::new(Mutex::new(CacheController::new()));
+    let sweeper = Sweeper::new(cache_controller.clone(),base_dir.to_string());
+    let mut chain = Chain::new(handler);
 
-    // Create shared HTTP client
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    chain.link_before(CacheMiddleware{cache_controller: cache_controller});
 
-    // Create app state
-    let state = AppState {
-        cache_controller,
-        config: config.clone(),
-        client,
-    };
-    
-    // Create router
-    let app = Router::new()
-        .route("/*path", get(handler))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
-    
-    // Start server
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.server.host, config.server.port)).await?;
-    tracing::info!("Server listening on {}:{}", config.server.host, config.server.port);
-    
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            tokio::signal::ctrl_c().await.ok();
-            tracing::info!("Shutdown signal received");
-            stop.store(true, Ordering::Relaxed);
-        })
-        .await?;
-    
-    // Cleanup
+    Iron::new(chain).http("0.0.0.0:9999").unwrap();
     sweeper.join();
-    
-    Ok(())
 }
