@@ -1,190 +1,243 @@
-extern crate time;
-use std::sync::{Mutex,Arc};
-use std::collections::{HashMap};
-use std::u64;
-use std::usize;
-use std::thread::JoinHandle;
-use std::thread;
-use std::time::{Duration};
-use std::collections::BTreeMap;
-use std::sync::mpsc::{Sender};
-use std::sync::mpsc::channel;
-use std::fs::remove_file;
+use crate::error::{LithiumError, Result};
+use std::sync::{Arc, RwLock, Mutex};
+use std::collections::{HashMap, BTreeMap, HashSet};
+use std::thread::{JoinHandle, spawn};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::{Sender, channel};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs;
+use std::path::PathBuf;
+use tracing::{info, error, debug};
 
-#[derive(Debug)]
-struct TimeUrl{
-    url : String,
-    time: u64, //unix timestamp
-    size: usize
+#[derive(Debug, Clone)]
+struct TimeUrl {
+    url: String,
+    time: u64, // unix timestamp in nanoseconds
+    size: usize,
 }
-
-type TimeUrlRef = Box<TimeUrl>;
 
 fn now() -> u64 {
-    time::precise_time_ns()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
 
-impl TimeUrl  {
-    fn new(url: String) -> TimeUrlRef {
-        let _ref =
-            Box::new(
-                TimeUrl
-                {
-                    url: url.to_owned(),
-                    time : now(),
-                    size : 0
-                }
-        );
-        return _ref;
+impl TimeUrl {
+    fn new(url: String) -> Self {
+        Self {
+            url: url.to_owned(),
+            time: now(),
+            size: 0,
+        }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HitMiss {
     Hit,
     Miss,
     Downloading,
 }
 
-#[allow(dead_code)]
 pub struct CacheController {
-    urls: BTreeMap<u64, String>,
-    url_map: HashMap<String, TimeUrlRef>,
-    size : usize,
-    mutex: Arc<Mutex<bool>>,
+    urls: BTreeMap<(u64, String), ()>,
+    url_map: HashMap<String, TimeUrl>,
+    downloading: Arc<Mutex<HashSet<String>>>, // Track URLs currently being downloaded
+    size: usize,
     size_limit: usize,
-    soft_limit_ratio : f64,
-    sweep_time: usize,
+    soft_limit_ratio: f64,
+    sweep_interval_secs: u64,
     max_delete_per_iteration: usize,
+    max_file_size: usize,
 }
 
-impl CacheController{
-    pub fn new() -> CacheController{
-        let ret = CacheController {
+impl CacheController {
+    pub fn new(size_limit: usize, soft_limit_ratio: f64, sweep_interval_secs: u64, max_delete_per_iteration: usize, max_file_size: usize) -> Self {
+        Self {
             urls: BTreeMap::new(),
-            url_map : HashMap::new(),
+            url_map: HashMap::new(),
+            downloading: Arc::new(Mutex::new(HashSet::new())),
             size: 0,
-            mutex: Arc::new(Mutex::new(false)),
-            size_limit: 100000,
-            soft_limit_ratio : 0.85,
-            sweep_time : 10,
-            max_delete_per_iteration: 100,
-        };
-
-        return ret;
+            size_limit,
+            soft_limit_ratio,
+            sweep_interval_secs,
+            max_delete_per_iteration,
+            max_file_size,
+        }
     }
 
-    #[allow(dead_code)]
-    pub fn access(&mut self,url: &str) -> HitMiss {
-
-        let is_some = self.url_map.get(url).is_some();
-        if is_some {
-            let state = self.update(url);
-            return state;
-
-        } else {
-            self.push(url);
+    pub fn access(&mut self, url: &str) -> HitMiss {
+        // Check if already in cache
+        if self.url_map.get(url).is_some() {
+            return self.update(url);
         }
+        
+        // Check if currently downloading
+        if let Ok(downloading) = self.downloading.lock() {
+            if downloading.contains(url) {
+                return HitMiss::Downloading;
+            }
+        }
+        
+        // Mark as downloading and add to cache
+        if let Ok(mut downloading) = self.downloading.lock() {
+            downloading.insert(url.to_string());
+        }
+        self.push(url);
         HitMiss::Miss
     }
 
-    fn push(&mut self, url: &str){
+    fn push(&mut self, url: &str) {
         let data = TimeUrl::new(url.to_owned());
-
-        self.urls.insert(data.time, url.to_owned());
-        self.url_map.insert(url.to_owned(),data);
+        self.urls.insert((data.time, url.to_owned()), ());
+        self.url_map.insert(url.to_owned(), data);
+        debug!("Added {} to cache", url);
     }
 
     fn update(&mut self, url: &str) -> HitMiss {
-        let value = self.url_map.get_mut(url);
-        if let Some(v) = value {
+        if let Some(v) = self.url_map.get_mut(url) {
             match v.size {
-                0 => return HitMiss::Downloading,
+                0 => HitMiss::Downloading,
                 _ => {
-                    self.urls.remove(&v.time);
+                    self.urls.remove(&(v.time, v.url.clone()));
                     v.time = now();
-                    self.urls.insert(v.time, v.url.to_owned());
-
-
-                    return HitMiss::Hit
+                    self.urls.insert((v.time, v.url.clone()), ());
+                    HitMiss::Hit
                 }
             }
-        }else {
-            panic!("What the hell");
-        }
-    }
-
-    pub fn remove(&mut self,url :&str) {
-        self.url_map.remove(url);
-    }
-
-    pub fn download_done(&mut self,url: &str,size: usize){
-
-        let url_data = self.url_map.get_mut(url);
-        if let Some(v) = url_data {
-            v.size = size;
-            self.size += v.size;
         } else {
-            println!("unexpected!");
+            error!("Cache inconsistency: URL {} not found in url_map", url);
+            HitMiss::Miss
         }
     }
 
-    pub fn set_size_limit(&mut self){
-
+    pub fn remove(&mut self, url: &str) {
+        if let Some(time_url) = self.url_map.remove(url) {
+            self.urls.remove(&(time_url.time, url.to_owned()));
+            self.size = self.size.saturating_sub(time_url.size);
+            debug!("Removed {} from cache", url);
+        }
+        
+        // Also remove from downloading set
+        if let Ok(mut downloading) = self.downloading.lock() {
+            downloading.remove(url);
+        }
     }
-    pub fn set_time_limit(&mut self){
-
+    
+    pub fn download_failed(&mut self, url: &str) {
+        // Remove from downloading set
+        if let Ok(mut downloading) = self.downloading.lock() {
+            downloading.remove(url);
+        }
+        
+        // Remove from cache if it exists
+        self.remove(url);
+        error!("Download failed for {}", url);
     }
 
-    pub fn stats(&self) {
-        println!("Index Size {}", self.url_map.len());
-        println!("Files Size {}", self.size);
-
-    }
-
-    pub fn dump(&self){
-        for i in self.url_map.iter(){
-            println!("{:?}", i);
+    pub fn download_done(&mut self, url: &str, size: usize) -> Result<()> {
+        // Check file size limit
+        if size > self.max_file_size {
+            // Remove from downloading set
+            if let Ok(mut downloading) = self.downloading.lock() {
+                downloading.remove(url);
+            }
+            return Err(LithiumError::Download {
+                message: format!("File too large: {} bytes (max: {})", size, self.max_file_size)
+            });
+        }
+        
+        if let Some(v) = self.url_map.get_mut(url) {
+            v.size = size;
+            self.size += size;
+            
+            // Remove from downloading set
+            if let Ok(mut downloading) = self.downloading.lock() {
+                downloading.remove(url);
+            }
+            
+            info!("Download completed for {}: {} bytes", url, size);
+            Ok(())
+        } else {
+            // Remove from downloading set on error
+            if let Ok(mut downloading) = self.downloading.lock() {
+                downloading.remove(url);
+            }
+            Err(LithiumError::Cache {
+                message: format!("URL {} not found in cache", url)
+            })
         }
     }
 
-    fn sweep(&mut self, file_deleter : &Sender<String>) -> usize {
+    pub fn set_size_limit(&mut self, limit: usize) {
+        self.size_limit = limit;
+        info!("Cache size limit set to {} bytes", limit);
+    }
+
+    pub fn stats(&self) -> (usize, usize) {
+        (self.url_map.len(), self.size)
+    }
+
+    pub fn dump(&self) {
+        info!("Cache stats: {} entries, {} bytes", self.url_map.len(), self.size);
+        for (url, time_url) in &self.url_map {
+            debug!("  {}: {} bytes, accessed at {}", url, time_url.size, time_url.time);
+        }
+    }
+
+    fn sweep(&mut self, file_deleter: &Sender<String>) -> u64 {
         let max_delete = self.max_delete_per_iteration;
-        let mut i=0;
-        while i < max_delete && self.soft_limit_passed() {
-            self.sweep_once(file_deleter);
-            i += 1;
+        let mut deleted = 0;
+        
+        while deleted < max_delete && self.soft_limit_passed() {
+            if self.sweep_once(file_deleter) {
+                deleted += 1;
+            } else {
+                break; // No more items to delete
+            }
         }
-        self.sweep_time
+        
+        if deleted > 0 {
+            info!("Swept {} items from cache", deleted);
+        }
+        
+        self.sweep_interval_secs
     }
 
-    fn get_oldest(&mut self)-> Option<(u64,String)>{
-        let time_url =self.urls.iter().nth(0);
-        if let Some(time_url_value) = time_url {
-            let _time = *time_url_value.0;
-            let _url = time_url_value.1.to_owned();
-            return Some((_time,_url));
-        }
-        return None
+    fn get_oldest(&self) -> Option<(u64, String)> {
+        self.urls.iter().next().map(|((time, url), _)| (*time, url.clone()))
     }
 
-    fn sweep_once(&mut self,file_deleter: &Sender<String>){
-        let time_url = self.get_oldest();
-        if let Some((time,url)) = time_url {
-            let size = self.url_map.get(&url).unwrap().size; //TODO: Check for error
-            self.size -= size;
-            file_deleter.send(url.to_owned());
-            self.url_map.remove(&url);
-            self.urls.remove(&time);
-            println!("Attemp to remove {}", url);
-        };
+    fn sweep_once(&mut self, file_deleter: &Sender<String>) -> bool {
+        if let Some((time, url)) = self.get_oldest() {
+            if let Some(time_url) = self.url_map.get(&url) {
+                let size = time_url.size;
 
+                if let Err(e) = file_deleter.send(url.clone()) {
+                    error!("Failed to send file deletion request: {}", e);
+                    return false;
+                }
 
+                // Only update accounting after successful send
+                self.size = self.size.saturating_sub(size);
+                self.url_map.remove(&url);
+                self.urls.remove(&(time, url.clone()));
+                info!("Scheduled removal of {}", url);
+                true
+            } else {
+                error!("Cache inconsistency: URL {} not found in url_map", url);
+                false
+            }
+        } else {
+            false
+        }
     }
 
     pub fn soft_limit_passed(&self) -> bool {
-        self.size  > (self.size_limit as f64 * self.soft_limit_ratio) as usize
+        self.size > (self.size_limit as f64 * self.soft_limit_ratio) as usize
     }
+    
     pub fn hard_limit_passed(&self) -> bool {
         self.size > self.size_limit
     }
@@ -192,69 +245,135 @@ impl CacheController{
 }
 
 pub struct Sweeper {
-    sweeper_handle : JoinHandle<()>,
-    file_deleter_handle : JoinHandle<()>,
+    sweeper_handle: JoinHandle<()>,
+    file_deleter_handle: JoinHandle<()>,
 }
 
 impl Sweeper {
-    pub fn new(cache_controller :Arc<Mutex<CacheController>>,base_dir: String) -> Sweeper {
-        let (tx,_rx) = channel();
+    pub fn new(cache_controller: Arc<RwLock<CacheController>>, base_dir: PathBuf, stop: Arc<AtomicBool>) -> Self {
+        let (tx, rx) = channel();
 
-        let sweeper_handle = thread::spawn(move ||{
-                println!("Sweeper thread has been started");
-                let delete_channel = tx;
-                loop {
-                    let mut mutex = cache_controller.lock().unwrap();
-                    println!("sweeping once");
-                    let delay = mutex.sweep(&delete_channel);
-                    drop(mutex);
-                    thread::sleep(Duration::from_secs(delay as u64))
+        let stop_sweeper = stop.clone();
+        let sweeper_handle = spawn(move || {
+            info!("Sweeper thread started");
+            let delete_channel = tx;
+            while !stop_sweeper.load(Ordering::Relaxed) {
+                let delay = {
+                    match cache_controller.write() {
+                        Ok(mut cache) => cache.sweep(&delete_channel),
+                        Err(e) => {
+                            error!("Failed to acquire cache lock in sweeper: {}", e);
+                            60
+                        }
+                    }
+                };
+                // Sleep in 100ms increments so stop flag is checked frequently
+                let mut elapsed = 0u64;
+                while elapsed < delay * 1000 && !stop_sweeper.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(100));
+                    elapsed += 100;
                 }
             }
-        );
+            info!("Sweeper thread stopped");
+        });
 
-
-        let file_deleter_handle = thread::spawn(move ||{
-                println!("File deleter thread has been started");
-                let rx = _rx;
-                while let Ok(message) = rx.recv() {
-                    let file_path = format!("{}{}",base_dir,message);
-                    println!("deleting  file {:?}", file_path);
-
-                    remove_file(file_path);
+        let file_deleter_handle = spawn(move || {
+            info!("File deleter thread started");
+            while let Ok(message) = rx.recv() {
+                let file_path = base_dir.join(&message);
+                if let Err(e) = fs::remove_file(&file_path) {
+                    error!("Failed to delete file {}: {}", file_path.display(), e);
+                } else {
+                    info!("Deleted file: {}", file_path.display());
                 }
-
             }
-        );
+            info!("File deleter thread stopped");
+        });
 
-        return Sweeper{
-            sweeper_handle : sweeper_handle,
-            file_deleter_handle : file_deleter_handle
+        Self {
+            sweeper_handle,
+            file_deleter_handle,
         }
     }
 
-    pub fn join(& self){
+    pub fn join(self) {
+        let _ = self.sweeper_handle.join();
+        let _ = self.file_deleter_handle.join();
     }
 }
 
-#[test]
-fn test_cache() {
-    let mut cache_controller = CacheController::new();
-    let test1 = (cache_controller.access("hello"),
-    cache_controller.access("hello2"),
-    cache_controller.access("hello"));
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    match test1 {
-        (HitMiss::Miss,HitMiss,HitMiss::Downloading) => {},
-        t => {
-            panic!(format!("Expected miss, miss, downloading but {:?} found",t))
+    #[test]
+    fn test_cache() {
+        let mut cache_controller = CacheController::new(1000, 0.8, 1, 10, 100);
+        
+        // Test initial access (should be miss)
+        assert_eq!(cache_controller.access("hello"), HitMiss::Miss);
+        assert_eq!(cache_controller.access("hello2"), HitMiss::Miss);
+        
+        // Test downloading state
+        assert_eq!(cache_controller.access("hello"), HitMiss::Downloading);
+        
+        // Test download completion
+        assert!(cache_controller.download_done("hello", 10).is_ok());
+        
+        // Test hit after download
+        assert_eq!(cache_controller.access("hello"), HitMiss::Hit);
+        
+        // Test stats
+        let (entries, size) = cache_controller.stats();
+        assert_eq!(entries, 2);
+        assert_eq!(size, 10);
+    }
+    
+    #[test]
+    fn test_sweep_size_accounting_on_send_failure() {
+        // This test verifies size is NOT decremented if sweep channel is broken
+        let mut cache = CacheController::new(100, 0.5, 1, 10, 100);
+        cache.access("file1");
+        cache.download_done("file1", 60).unwrap(); // over soft limit (100 * 0.5 = 50)
+
+        // Create a channel then drop receiver immediately — send will fail
+        let (tx, _rx) = std::sync::mpsc::channel::<String>();
+        drop(_rx);
+
+        let result = cache.sweep_once(&tx);
+        // send failed, so sweep_once returns false
+        assert!(!result);
+        // size must NOT have changed — no decrement on failed send
+        let (_, size) = cache.stats();
+        assert_eq!(size, 60);
+    }
+
+    #[test]
+    fn test_no_collision_on_same_timestamp() {
+        let mut cache = CacheController::new(10000, 0.9, 60, 10, 1000);
+        for i in 0..100 {
+            let url = format!("/file{}", i);
+            cache.access(&url);
+            cache.download_done(&url, 10).unwrap();
+        }
+        let (entries, size) = cache.stats();
+        assert_eq!(entries, 100, "all 100 entries must survive");
+        assert_eq!(size, 1000);
+    }
+
+    #[test]
+    fn test_file_size_limit() {
+        let mut cache_controller = CacheController::new(1000, 0.8, 1, 10, 50);
+        
+        // Test file size limit
+        cache_controller.access("large_file");
+        let result = cache_controller.download_done("large_file", 100); // Exceeds limit
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            LithiumError::Download { message } => {
+                assert!(message.contains("File too large"));
+            }
+            _ => panic!("Expected Download error"),
         }
     }
-    cache_controller.download_done("hello", 10);
-
-    match cache_controller.access("hello") {
-        HitMiss::Hit => {}
-        T => panic!(format!("Should be {:?} but it's {:?}",HitMiss::Hit,T))
-    }
-    cache_controller.stats();
 }
