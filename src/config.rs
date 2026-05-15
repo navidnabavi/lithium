@@ -102,6 +102,11 @@ impl Config {
         if self.base_url.is_empty() {
             return Err(anyhow::anyhow!("Base URL cannot be empty"));
         }
+        if let BackendConfig::S3 { accel_prefix, .. } = &self.backend {
+            if accel_prefix.is_empty() {
+                return Err(anyhow::anyhow!("S3 accel_prefix cannot be empty"));
+            }
+        }
         Ok(())
     }
 }
