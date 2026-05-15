@@ -25,14 +25,14 @@ A modern, secure cache-based file CDN written in Rust.
    ```
 
 3. **Configure** (optional):
-   ```bash
-   cp lithium.toml.example lithium.toml
-   # Edit lithium.toml with your settings
-   ```
+
+   Edit `lithium.toml` with your settings (defaults work out of the box).
 
 4. **Run**:
    ```bash
    cargo run
+   # or release build:
+   cargo run --release
    ```
 
 ## Configuration
@@ -71,14 +71,66 @@ The server acts as a proxy cache. Requests to `http://localhost:9999/path/to/fil
 
 ## Development
 
-Run tests:
+### Running
+
 ```bash
-cargo test
+# Development (with auto-recompile on change)
+cargo run
+
+# Release build
+cargo run --release
+
+# With debug logging
+RUST_LOG=debug cargo run
+
+# Custom log level per module
+RUST_LOG=lithium=debug,tower_http=info cargo run
 ```
 
-Run with debug logging:
+### Testing
+
 ```bash
-RUST_LOG=debug cargo run
+# Run all tests
+cargo test
+
+# Run a specific test by name
+cargo test test_cache
+
+# Run tests with output (don't suppress println/logs)
+cargo test -- --nocapture
+
+# Run tests in a specific module
+cargo test cache_controller
+```
+
+### Manual testing
+
+Once the server is running on port 9999, test with curl:
+
+```bash
+# Request a file (cache miss → downloads from base_url, returns X-Accel-Redirect)
+curl -v http://localhost:9999/path/to/file
+
+# Second request (cache hit)
+curl -v http://localhost:9999/path/to/file
+
+# While a file is downloading, a concurrent request returns 503 + Retry-After: 1
+curl -v http://localhost:9999/large-file
+```
+
+### nginx integration
+
+Lithium responds with `X-Accel-Redirect` — nginx must serve the actual files. Example nginx config:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:9999;
+}
+
+location /files/ {
+    internal;
+    root /tmp/lithium-cache;
+}
 ```
 
 ## License
