@@ -47,68 +47,10 @@ pub async fn download_file(
     Ok(size)
 }
 
-// validate_path remains for callers that need base-dir-scoped path validation
-pub fn validate_path(path: &str, base_dir: &std::path::Path) -> Result<std::path::PathBuf> {
-    let clean_path = std::path::PathBuf::from(path_clean::clean(path));
-
-    if clean_path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(LithiumError::PathTraversal {
-            path: path.to_string(),
-        });
-    }
-
-    let full_path = base_dir.join(clean_path);
-
-    if !full_path.starts_with(base_dir) {
-        return Err(LithiumError::PathTraversal {
-            path: path.to_string(),
-        });
-    }
-
-    Ok(full_path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use async_trait::async_trait;
-
-    // ---- validate_path tests (unchanged) ----
-
-    #[test]
-    fn test_validate_path_safe() {
-        let base_dir = Path::new("/tmp/cache");
-        let result = validate_path("safe/path/file.txt", base_dir);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Path::new("/tmp/cache/safe/path/file.txt"));
-    }
-
-    #[test]
-    fn test_validate_path_traversal() {
-        let base_dir = Path::new("/tmp/cache");
-        let result = validate_path("../../../etc/passwd", base_dir);
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LithiumError::PathTraversal { path } => {
-                assert_eq!(path, "../../../etc/passwd");
-            }
-            _ => panic!("Expected PathTraversal error"),
-        }
-    }
-
-    #[test]
-    fn test_validate_path_absolute() {
-        let base_dir = Path::new("/tmp/cache");
-        let result = validate_path("absolute/path", base_dir);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Path::new("/tmp/cache/absolute/path"));
-    }
-
-    // ---- download_file tests ----
 
     struct MockBackend;
 
