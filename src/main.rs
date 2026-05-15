@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tower_http::trace::TraceLayer;
 use std::sync::RwLock;
 
@@ -125,7 +126,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     )));
     
     // Create sweeper
-    let sweeper = Sweeper::new(cache_controller.clone(), config.base_dir.clone());
+    let stop = Arc::new(AtomicBool::new(false));
+    let sweeper = Sweeper::new(cache_controller.clone(), config.base_dir.clone(), stop.clone());
 
     // Create shared HTTP client
     let client = reqwest::Client::builder()
@@ -149,7 +151,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", config.server.host, config.server.port)).await?;
     tracing::info!("Server listening on {}:{}", config.server.host, config.server.port);
     
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("Shutdown signal received");
+            stop.store(true, Ordering::Relaxed);
+        })
+        .await?;
     
     // Cleanup
     sweeper.join();
