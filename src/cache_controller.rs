@@ -249,7 +249,7 @@ pub struct Sweeper {
 }
 
 impl Sweeper {
-    pub async fn new(
+    pub fn new(
         cache_controller: Arc<RwLock<CacheController>>,
         backend: Arc<dyn StorageBackend>,
         stop: Arc<AtomicBool>,

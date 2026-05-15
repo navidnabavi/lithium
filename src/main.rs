@@ -127,7 +127,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     )));
 
     let stop = Arc::new(AtomicBool::new(false));
-    let sweeper = Sweeper::new(cache_controller.clone(), backend.clone(), stop.clone()).await;
+    let sweeper = Sweeper::new(cache_controller.clone(), backend.clone(), stop.clone());
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
