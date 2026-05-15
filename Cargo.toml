@@ -1,11 +1,26 @@
 [package]
-name = "Lithium"
-version = "0.1.1"
+name = "lithium"
+version = "0.2.0"
 authors = ["Navid <navid92@gmail.com>"]
+edition = "2021"
+description = "A modern cache-based file CDN written in Rust"
+license = "MIT"
 
 [dependencies]
-time = "*"
-hyper = "0.8.1"
-
-[dependencies.iron]
-version="0.3.0"
+tokio = { version = "1.0", features = ["full"] }
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+url = "2.4"
+path-clean = "0.1"
+toml = "0.8"
+reqwest = { version = "0.11", features = ["json"] }
+futures-util = "0.3"
