@@ -48,8 +48,11 @@ async fn handler(
             return Ok(xaccel_redirect(&xaccel_uri));
         }
         HitMiss::Downloading => {
-            tracing::info!("File downloading for {}", path);
-            return Ok(xaccel_redirect(&xaccel_uri));
+            tracing::info!("File still downloading for {}", path);
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                [("Retry-After", "1")],
+            ).into_response());
         }
         HitMiss::Miss => {
             tracing::info!("Cache miss for {}", path);
