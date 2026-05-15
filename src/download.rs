@@ -5,7 +5,7 @@ use std::io::Write;
 use tracing::info;
 use url::Url;
 
-pub async fn download_file(url: &str, filename: &str) -> Result<usize> {
+pub async fn download_file(client: &reqwest::Client, url: &str, filename: &str) -> Result<usize> {
     // Validate URL
     let parsed_url = Url::parse(url)?;
     if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
@@ -40,11 +40,6 @@ pub async fn download_file(url: &str, filename: &str) -> Result<usize> {
     }
 
     info!("Downloading {} to {}", url, clean_path.display());
-
-    // Create HTTP client
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
 
     // Download the file
     let response = client.get(url).send().await?;
@@ -127,7 +122,8 @@ mod tests {
     async fn test_download_file_rejects_traversal() {
         // /../etc/shadow — after path_clean becomes /etc/shadow (starts with "/", passes current check)
         // Must be rejected because raw path contains ParentDir components
-        let result = download_file("https://example.com/file", "/../etc/shadow").await;
+        let client = reqwest::Client::new();
+        let result = download_file(&client, "https://example.com/file", "/../etc/shadow").await;
         assert!(result.is_err());
         match result.unwrap_err() {
             crate::error::LithiumError::PathTraversal { path } => {
