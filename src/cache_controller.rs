@@ -4,6 +4,7 @@ use std::collections::{HashMap, BTreeMap, HashSet};
 use std::thread::{JoinHandle, spawn};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::sync::mpsc::{Sender, channel};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
 use std::path::PathBuf;
 use tracing::{info, error, debug};
@@ -249,24 +250,31 @@ pub struct Sweeper {
 }
 
 impl Sweeper {
-    pub fn new(cache_controller: Arc<RwLock<CacheController>>, base_dir: PathBuf) -> Self {
+    pub fn new(cache_controller: Arc<RwLock<CacheController>>, base_dir: PathBuf, stop: Arc<AtomicBool>) -> Self {
         let (tx, rx) = channel();
 
+        let stop_sweeper = stop.clone();
         let sweeper_handle = spawn(move || {
             info!("Sweeper thread started");
             let delete_channel = tx;
-            loop {
+            while !stop_sweeper.load(Ordering::Relaxed) {
                 let delay = {
                     match cache_controller.write() {
                         Ok(mut cache) => cache.sweep(&delete_channel),
                         Err(e) => {
                             error!("Failed to acquire cache lock in sweeper: {}", e);
-                            60 // Wait 1 minute before retrying
+                            60
                         }
                     }
                 };
-                std::thread::sleep(Duration::from_secs(delay));
+                // Sleep in 100ms increments so stop flag is checked frequently
+                let mut elapsed = 0u64;
+                while elapsed < delay * 1000 && !stop_sweeper.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(100));
+                    elapsed += 100;
+                }
             }
+            info!("Sweeper thread stopped");
         });
 
         let file_deleter_handle = spawn(move || {
@@ -279,6 +287,7 @@ impl Sweeper {
                     info!("Deleted file: {}", file_path.display());
                 }
             }
+            info!("File deleter thread stopped");
         });
 
         Self {
