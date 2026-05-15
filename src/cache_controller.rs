@@ -40,7 +40,7 @@ pub enum HitMiss {
 }
 
 pub struct CacheController {
-    urls: BTreeMap<u64, String>,
+    urls: BTreeMap<(u64, String), ()>,
     url_map: HashMap<String, TimeUrl>,
     downloading: Arc<Mutex<HashSet<String>>>, // Track URLs currently being downloaded
     size: usize,
@@ -89,7 +89,7 @@ impl CacheController {
 
     fn push(&mut self, url: &str) {
         let data = TimeUrl::new(url.to_owned());
-        self.urls.insert(data.time, url.to_owned());
+        self.urls.insert((data.time, url.to_owned()), ());
         self.url_map.insert(url.to_owned(), data);
         debug!("Added {} to cache", url);
     }
@@ -99,9 +99,9 @@ impl CacheController {
             match v.size {
                 0 => HitMiss::Downloading,
                 _ => {
-                    self.urls.remove(&v.time);
+                    self.urls.remove(&(v.time, v.url.clone()));
                     v.time = now();
-                    self.urls.insert(v.time, v.url.clone());
+                    self.urls.insert((v.time, v.url.clone()), ());
                     HitMiss::Hit
                 }
             }
@@ -113,7 +113,7 @@ impl CacheController {
 
     pub fn remove(&mut self, url: &str) {
         if let Some(time_url) = self.url_map.remove(url) {
-            self.urls.remove(&time_url.time);
+            self.urls.remove(&(time_url.time, url.to_owned()));
             self.size = self.size.saturating_sub(time_url.size);
             debug!("Removed {} from cache", url);
         }
@@ -205,7 +205,7 @@ impl CacheController {
     }
 
     fn get_oldest(&self) -> Option<(u64, String)> {
-        self.urls.iter().next().map(|(time, url)| (*time, url.clone()))
+        self.urls.iter().next().map(|((time, url), _)| (*time, url.clone()))
     }
 
     fn sweep_once(&mut self, file_deleter: &Sender<String>) -> bool {
@@ -221,7 +221,7 @@ impl CacheController {
                 // Only update accounting after successful send
                 self.size = self.size.saturating_sub(size);
                 self.url_map.remove(&url);
-                self.urls.remove(&time);
+                self.urls.remove(&(time, url.clone()));
                 info!("Scheduled removal of {}", url);
                 true
             } else {
@@ -337,6 +337,19 @@ mod tests {
         // size must NOT have changed — no decrement on failed send
         let (_, size) = cache.stats();
         assert_eq!(size, 60);
+    }
+
+    #[test]
+    fn test_no_collision_on_same_timestamp() {
+        let mut cache = CacheController::new(10000, 0.9, 60, 10, 1000);
+        for i in 0..100 {
+            let url = format!("/file{}", i);
+            cache.access(&url);
+            cache.download_done(&url, 10).unwrap();
+        }
+        let (entries, size) = cache.stats();
+        assert_eq!(entries, 100, "all 100 entries must survive");
+        assert_eq!(size, 1000);
     }
 
     #[test]
