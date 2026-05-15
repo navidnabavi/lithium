@@ -14,11 +14,14 @@ mod cache_controller;
 mod download;
 mod config;
 mod error;
+mod backend;
 
 use cache_controller::*;
 use download::*;
 use config::*;
 use error::*;
+use backend::StorageBackend;
+use backend::create_backend;
 
 
 
