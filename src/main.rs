@@ -25,6 +25,7 @@ use error::*;
 struct AppState {
     cache_controller: Arc<RwLock<CacheController>>,
     config: Config,
+    client: reqwest::Client,
 }
 
 async fn handler(
@@ -59,7 +60,7 @@ async fn handler(
     let download_url = format!("{}{}", state.config.base_url, path);
     let download_path = state.config.base_dir.join(&path);
     
-    match download_file(&download_url, &download_path.to_string_lossy()).await {
+    match download_file(&state.client, &download_url, &download_path.to_string_lossy()).await {
         Ok(size) => {
             let mut cache = state.cache_controller.write()
                 .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
@@ -122,11 +123,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     
     // Create sweeper
     let sweeper = Sweeper::new(cache_controller.clone(), config.base_dir.clone());
-    
+
+    // Create shared HTTP client
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
     // Create app state
     let state = AppState {
         cache_controller,
         config: config.clone(),
+        client,
     };
     
     // Create router
