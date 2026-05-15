@@ -5,10 +5,11 @@ A modern, secure cache-based file CDN written in Rust.
 ## Features
 
 - **High Performance**: Built with async/await and modern Rust
+- **Multi-Backend Storage**: File system or S3/MinIO, selected at runtime via config
 - **Secure**: Path traversal protection and input validation
+- **nginx offload**: Responds with `X-Accel-Redirect` — nginx serves bytes, Lithium stays lean
 - **Configurable**: TOML-based configuration
 - **Observable**: Comprehensive logging and metrics
-- **Thread-Safe**: Proper synchronization and error handling
 
 ## Quick Start
 
@@ -39,6 +40,8 @@ A modern, secure cache-based file CDN written in Rust.
 
 The application can be configured via `lithium.toml`:
 
+### File backend (default)
+
 ```toml
 [server]
 host = "0.0.0.0"
@@ -49,9 +52,44 @@ size_limit = 100000000  # 100MB
 soft_limit_ratio = 0.85
 sweep_interval_secs = 10
 max_delete_per_iteration = 100
+max_file_size = 10000000  # 10MB
 
 base_url = "https://example.com"
+
+[backend]
+type = "file"
 base_dir = "/tmp/lithium-cache"
+```
+
+### S3/MinIO backend
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 9999
+
+[cache]
+size_limit = 100000000
+soft_limit_ratio = 0.85
+sweep_interval_secs = 10
+max_delete_per_iteration = 100
+max_file_size = 10000000
+
+base_url = "https://example.com"
+
+[backend]
+type = "s3"
+bucket = "my-bucket"
+endpoint = "https://s3.us-east-1.amazonaws.com"
+region = "us-east-1"
+accel_prefix = "/s3-internal"
+```
+
+S3 credentials are read from environment variables — not stored in `lithium.toml`:
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
 ```
 
 ## Usage
@@ -120,7 +158,9 @@ curl -v http://localhost:9999/large-file
 
 ### nginx integration
 
-Lithium responds with `X-Accel-Redirect` — nginx must serve the actual files. Example nginx config:
+Lithium responds with `X-Accel-Redirect` — nginx serves the actual bytes. No 3xx redirects ever.
+
+**File backend:**
 
 ```nginx
 location / {
@@ -130,6 +170,19 @@ location / {
 location /files/ {
     internal;
     root /tmp/lithium-cache;
+}
+```
+
+**S3/MinIO backend:**
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:9999;
+}
+
+location /s3-internal/ {
+    internal;
+    proxy_pass https://<bucket>.<endpoint>/;
 }
 ```
 
