@@ -119,15 +119,21 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let backend = create_backend(&config.backend).await?;
 
     let cache_controller = Arc::new(RwLock::new(CacheController::new(
-        config.cache.size_limit,
-        config.cache.soft_limit_ratio,
-        config.cache.sweep_interval_secs,
-        config.cache.max_delete_per_iteration,
         config.cache.max_file_size,
     )));
 
     let stop = Arc::new(AtomicBool::new(false));
-    let sweeper = Sweeper::new(cache_controller.clone(), backend.clone(), stop.clone());
+    let sweeper = if config.sweeper.enabled {
+        Some(Sweeper::new(
+            cache_controller.clone(),
+            backend.clone(),
+            stop.clone(),
+            config.sweeper.clone(),
+        ))
+    } else {
+        tracing::info!("Sweeper disabled via config");
+        None
+    };
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -158,7 +164,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    sweeper.join().await;
+    if let Some(s) = sweeper {
+        s.join().await;
+    }
 
     Ok(())
 }

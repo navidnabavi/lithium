@@ -1,4 +1,5 @@
 use crate::backend::StorageBackend;
+use crate::config::SweeperConfig;
 use crate::error::{LithiumError, Result};
 use std::sync::{Arc, RwLock, Mutex};
 use std::collections::{HashMap, BTreeMap, HashSet};
@@ -44,24 +45,16 @@ pub struct CacheController {
     url_map: HashMap<String, TimeUrl>,
     downloading: Arc<Mutex<HashSet<String>>>, // Track URLs currently being downloaded
     size: usize,
-    size_limit: usize,
-    soft_limit_ratio: f64,
-    sweep_interval_secs: u64,
-    max_delete_per_iteration: usize,
     max_file_size: usize,
 }
 
 impl CacheController {
-    pub fn new(size_limit: usize, soft_limit_ratio: f64, sweep_interval_secs: u64, max_delete_per_iteration: usize, max_file_size: usize) -> Self {
+    pub fn new(max_file_size: usize) -> Self {
         Self {
             urls: BTreeMap::new(),
             url_map: HashMap::new(),
             downloading: Arc::new(Mutex::new(HashSet::new())),
             size: 0,
-            size_limit,
-            soft_limit_ratio,
-            sweep_interval_secs,
-            max_delete_per_iteration,
             max_file_size,
         }
     }
@@ -71,14 +64,14 @@ impl CacheController {
         if self.url_map.get(url).is_some() {
             return self.update(url);
         }
-        
+
         // Check if currently downloading
         if let Ok(downloading) = self.downloading.lock() {
             if downloading.contains(url) {
                 return HitMiss::Downloading;
             }
         }
-        
+
         // Mark as downloading and add to cache
         if let Ok(mut downloading) = self.downloading.lock() {
             downloading.insert(url.to_string());
@@ -117,19 +110,19 @@ impl CacheController {
             self.size = self.size.saturating_sub(time_url.size);
             debug!("Removed {} from cache", url);
         }
-        
+
         // Also remove from downloading set
         if let Ok(mut downloading) = self.downloading.lock() {
             downloading.remove(url);
         }
     }
-    
+
     pub fn download_failed(&mut self, url: &str) {
         // Remove from downloading set
         if let Ok(mut downloading) = self.downloading.lock() {
             downloading.remove(url);
         }
-        
+
         // Remove from cache if it exists
         self.remove(url);
         error!("Download failed for {}", url);
@@ -146,16 +139,16 @@ impl CacheController {
                 message: format!("File too large: {} bytes (max: {})", size, self.max_file_size)
             });
         }
-        
+
         if let Some(v) = self.url_map.get_mut(url) {
             v.size = size;
             self.size += size;
-            
+
             // Remove from downloading set
             if let Ok(mut downloading) = self.downloading.lock() {
                 downloading.remove(url);
             }
-            
+
             info!("Download completed for {}: {} bytes", url, size);
             Ok(())
         } else {
@@ -169,11 +162,6 @@ impl CacheController {
         }
     }
 
-    pub fn set_size_limit(&mut self, limit: usize) {
-        self.size_limit = limit;
-        info!("Cache size limit set to {} bytes", limit);
-    }
-
     pub fn stats(&self) -> (usize, usize) {
         (self.url_map.len(), self.size)
     }
@@ -185,23 +173,22 @@ impl CacheController {
         }
     }
 
-    fn sweep(&mut self, file_deleter: &UnboundedSender<String>) -> u64 {
-        let max_delete = self.max_delete_per_iteration;
+    fn sweep(&mut self, file_deleter: &UnboundedSender<String>, size_limit: usize, soft_limit_ratio: f64, max_delete_per_iteration: usize, sweep_interval_secs: u64) -> u64 {
         let mut deleted = 0;
-        
-        while deleted < max_delete && self.soft_limit_passed() {
+
+        while deleted < max_delete_per_iteration && self.soft_limit_passed(size_limit, soft_limit_ratio) {
             if self.sweep_once(file_deleter) {
                 deleted += 1;
             } else {
                 break; // No more items to delete
             }
         }
-        
+
         if deleted > 0 {
             info!("Swept {} items from cache", deleted);
         }
-        
-        self.sweep_interval_secs
+
+        sweep_interval_secs
     }
 
     fn get_oldest(&self) -> Option<(u64, String)> {
@@ -233,14 +220,13 @@ impl CacheController {
         }
     }
 
-    pub fn soft_limit_passed(&self) -> bool {
-        self.size > (self.size_limit as f64 * self.soft_limit_ratio) as usize
-    }
-    
-    pub fn hard_limit_passed(&self) -> bool {
-        self.size > self.size_limit
+    pub fn soft_limit_passed(&self, size_limit: usize, soft_limit_ratio: f64) -> bool {
+        self.size > (size_limit as f64 * soft_limit_ratio) as usize
     }
 
+    pub fn hard_limit_passed(&self, size_limit: usize) -> bool {
+        self.size > size_limit
+    }
 }
 
 pub struct Sweeper {
@@ -253,6 +239,7 @@ impl Sweeper {
         cache_controller: Arc<RwLock<CacheController>>,
         backend: Arc<dyn StorageBackend>,
         stop: Arc<AtomicBool>,
+        cfg: SweeperConfig,
     ) -> Self {
         let (tx, mut rx) = unbounded_channel::<String>();
 
@@ -261,7 +248,13 @@ impl Sweeper {
             info!("Sweeper task started");
             while !stop_sweeper.load(Ordering::Relaxed) {
                 let delay_secs = match cache_controller.write() {
-                    Ok(mut cache) => cache.sweep(&tx),
+                    Ok(mut cache) => cache.sweep(
+                        &tx,
+                        cfg.size_limit,
+                        cfg.soft_limit_ratio,
+                        cfg.max_delete_per_iteration,
+                        cfg.sweep_interval_secs,
+                    ),
                     Err(e) => {
                         error!("Failed to acquire cache lock in sweeper: {}", e);
                         60
@@ -305,31 +298,31 @@ mod tests {
 
     #[test]
     fn test_cache() {
-        let mut cache_controller = CacheController::new(1000, 0.8, 1, 10, 100);
-        
+        let mut cache_controller = CacheController::new(100);
+
         // Test initial access (should be miss)
         assert_eq!(cache_controller.access("hello"), HitMiss::Miss);
         assert_eq!(cache_controller.access("hello2"), HitMiss::Miss);
-        
+
         // Test downloading state
         assert_eq!(cache_controller.access("hello"), HitMiss::Downloading);
-        
+
         // Test download completion
         assert!(cache_controller.download_done("hello", 10).is_ok());
-        
+
         // Test hit after download
         assert_eq!(cache_controller.access("hello"), HitMiss::Hit);
-        
+
         // Test stats
         let (entries, size) = cache_controller.stats();
         assert_eq!(entries, 2);
         assert_eq!(size, 10);
     }
-    
+
     #[test]
     fn test_sweep_size_accounting_on_send_failure() {
         // This test verifies size is NOT decremented if sweep channel is broken
-        let mut cache = CacheController::new(100, 0.5, 1, 10, 100);
+        let mut cache = CacheController::new(100);
         cache.access("file1");
         cache.download_done("file1", 60).unwrap(); // over soft limit (100 * 0.5 = 50)
 
@@ -347,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_no_collision_on_same_timestamp() {
-        let mut cache = CacheController::new(10000, 0.9, 60, 10, 1000);
+        let mut cache = CacheController::new(1000);
         for i in 0..100 {
             let url = format!("/file{}", i);
             cache.access(&url);
@@ -360,8 +353,8 @@ mod tests {
 
     #[test]
     fn test_file_size_limit() {
-        let mut cache_controller = CacheController::new(1000, 0.8, 1, 10, 50);
-        
+        let mut cache_controller = CacheController::new(50);
+
         // Test file size limit
         cache_controller.access("large_file");
         let result = cache_controller.download_done("large_file", 100); // Exceeds limit
@@ -372,5 +365,98 @@ mod tests {
             }
             _ => panic!("Expected Download error"),
         }
+    }
+
+    #[test]
+    fn test_cache_controller_new_takes_only_max_file_size() {
+        let cache = CacheController::new(100);
+        let (entries, size) = cache.stats();
+        assert_eq!(entries, 0);
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_soft_limit_passed_takes_params() {
+        let mut cache = CacheController::new(100);
+        cache.access("file1");
+        cache.download_done("file1", 60).unwrap();
+        // size_limit=100, ratio=0.5 → threshold=50; size=60 > 50 → true
+        assert!(cache.soft_limit_passed(100, 0.5));
+        // size_limit=100, ratio=0.9 → threshold=90; size=60 < 90 → false
+        assert!(!cache.soft_limit_passed(100, 0.9));
+    }
+
+    #[test]
+    fn test_sweep_takes_params() {
+        let mut cache = CacheController::new(100);
+        cache.access("file1");
+        cache.download_done("file1", 60).unwrap();
+
+        let (tx, mut rx) = unbounded_channel::<String>();
+        // size_limit=100, ratio=0.5 → over soft limit; max_delete=10; interval=5
+        let interval = cache.sweep(&tx, 100, 0.5, 10, 5);
+        assert_eq!(interval, 5);
+
+        let deleted = rx.try_recv().unwrap();
+        assert_eq!(deleted, "file1");
+        let (entries, size) = cache.stats();
+        assert_eq!(entries, 0);
+        assert_eq!(size, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sweeper_evicts_when_enabled() {
+        use bytes::Bytes;
+        use crate::config::SweeperConfig;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct NoopBackend;
+
+        #[async_trait::async_trait]
+        impl crate::backend::StorageBackend for NoopBackend {
+            async fn store(&self, _path: &str, _data: Bytes) -> crate::error::Result<usize> { Ok(0) }
+            async fn delete(&self, _path: &str) -> crate::error::Result<()> { Ok(()) }
+            fn accel_redirect_path(&self, path: &str) -> String { path.to_string() }
+        }
+
+        let cfg = SweeperConfig {
+            enabled: true,
+            size_limit: 100,
+            soft_limit_ratio: 0.5, // threshold: 50 bytes
+            sweep_interval_secs: 1,
+            max_delete_per_iteration: 10,
+        };
+
+        let cache = Arc::new(RwLock::new(CacheController::new(200)));
+        {
+            let mut c = cache.write().unwrap();
+            c.access("file1");
+            c.download_done("file1", 80).unwrap(); // 80 > 50 → over soft limit
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let backend: Arc<dyn crate::backend::StorageBackend> = Arc::new(NoopBackend);
+        let sweeper = Sweeper::new(cache.clone(), backend, stop.clone(), cfg);
+
+        // Let sweeper run (interval=1s, check after 300ms — sweeper runs immediately on first iteration)
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let (entries, _) = cache.read().unwrap().stats();
+        assert_eq!(entries, 0, "sweeper should have evicted file1");
+
+        stop.store(true, Ordering::Relaxed);
+        sweeper.join().await;
+    }
+
+    #[test]
+    fn test_sweeper_disabled_cache_retains_entries() {
+        // When no Sweeper is created (disabled), cache retains entries regardless of size
+        let mut cache = CacheController::new(100);
+        cache.access("file1");
+        cache.download_done("file1", 80).unwrap();
+
+        let (entries, size) = cache.stats();
+        assert_eq!(entries, 1);
+        assert_eq!(size, 80);
     }
 }
