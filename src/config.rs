@@ -175,7 +175,7 @@ mod tests {
         let toml_str = r#"enabled = false"#;
         let sweeper: SweeperConfig = toml::from_str(toml_str).unwrap();
         assert!(!sweeper.enabled);
-        let _ = sweeper.size_limit;
+        assert_eq!(sweeper.size_limit, 100_000_000); // default value
     }
 
     #[test]
@@ -212,6 +212,7 @@ mod tests {
         assert_eq!(config.cache.max_file_size, 10_000_000);
         assert!(config.sweeper.enabled);
         assert_eq!(config.sweeper.size_limit, 100_000_000);
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -237,7 +238,14 @@ mod tests {
     fn test_validation_rejects_bad_soft_limit_ratio_when_enabled() {
         let mut config = Config::default();
         config.sweeper.enabled = true;
+
         config.sweeper.soft_limit_ratio = 1.5;
+        assert!(config.validate().is_err());
+
+        config.sweeper.soft_limit_ratio = 0.0;
+        assert!(config.validate().is_err());
+
+        config.sweeper.soft_limit_ratio = 1.0;
         assert!(config.validate().is_err());
     }
 
