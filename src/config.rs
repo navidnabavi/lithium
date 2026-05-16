@@ -57,11 +57,21 @@ pub struct SweeperConfig {
     pub max_delete_per_iteration: usize,
 }
 
-fn default_true() -> bool { true }
-fn default_size_limit() -> usize { 100_000_000 }
-fn default_soft_limit_ratio() -> f64 { 0.85 }
-fn default_sweep_interval_secs() -> u64 { 10 }
-fn default_max_delete_per_iteration() -> usize { 100 }
+fn default_true() -> bool {
+    true
+}
+fn default_size_limit() -> usize {
+    100_000_000
+}
+fn default_soft_limit_ratio() -> f64 {
+    0.85
+}
+fn default_sweep_interval_secs() -> u64 {
+    10
+}
+fn default_max_delete_per_iteration() -> usize {
+    100
+}
 
 impl Default for SweeperConfig {
     fn default() -> Self {
@@ -129,10 +139,14 @@ impl Config {
                 return Err(anyhow::anyhow!("Sweep interval must be greater than 0"));
             }
             if self.sweeper.max_delete_per_iteration == 0 {
-                return Err(anyhow::anyhow!("Max delete per iteration must be greater than 0"));
+                return Err(anyhow::anyhow!(
+                    "Max delete per iteration must be greater than 0"
+                ));
             }
             if self.cache.max_file_size > self.sweeper.size_limit {
-                return Err(anyhow::anyhow!("Max file size cannot be larger than sweeper size limit"));
+                return Err(anyhow::anyhow!(
+                    "Max file size cannot be larger than sweeper size limit"
+                ));
             }
         }
         Ok(())
@@ -284,7 +298,12 @@ mod tests {
         "#;
         let backend: BackendConfig = toml::from_str(toml_str).unwrap();
         match backend {
-            BackendConfig::S3 { bucket, endpoint, region, accel_prefix } => {
+            BackendConfig::S3 {
+                bucket,
+                endpoint,
+                region,
+                accel_prefix,
+            } => {
                 assert_eq!(bucket, "my-bucket");
                 assert_eq!(endpoint, "https://s3.example.com");
                 assert_eq!(region, "us-east-1");

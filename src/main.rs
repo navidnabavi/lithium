@@ -1,26 +1,26 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::IntoResponse,
     routing::get,
     Router,
-    response::IntoResponse,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tower_http::trace::TraceLayer;
+use std::sync::Arc;
 use std::sync::RwLock;
+use tower_http::trace::TraceLayer;
 
-mod cache_controller;
-mod download;
-mod config;
-mod error;
 mod backend;
+mod cache_controller;
+mod config;
+mod download;
+mod error;
 
+use backend::{create_backend, StorageBackend};
 use cache_controller::*;
-use download::*;
 use config::*;
+use download::*;
 use error::*;
-use backend::{StorageBackend, create_backend};
 
 #[derive(Clone)]
 struct AppState {
@@ -38,8 +38,12 @@ async fn handler(
 
     // Check cache
     let cache_result = {
-        let mut cache = state.cache_controller.write()
-            .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
+        let mut cache = state
+            .cache_controller
+            .write()
+            .map_err(|_| LithiumError::Cache {
+                message: "Failed to acquire cache lock".to_string(),
+            })?;
         cache.access(&path)
     };
 
@@ -51,10 +55,7 @@ async fn handler(
         }
         HitMiss::Downloading => {
             tracing::info!("File still downloading for {}", path);
-            return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                [("Retry-After", "1")],
-            ).into_response());
+            return Ok((StatusCode::SERVICE_UNAVAILABLE, [("Retry-After", "1")]).into_response());
         }
         HitMiss::Miss => {
             tracing::info!("Cache miss for {}", path);
@@ -66,8 +67,12 @@ async fn handler(
 
     match download_file(&state.client, state.backend.as_ref(), &download_url, &path).await {
         Ok(size) => {
-            let mut cache = state.cache_controller.write()
-                .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
+            let mut cache = state
+                .cache_controller
+                .write()
+                .map_err(|_| LithiumError::Cache {
+                    message: "Failed to acquire cache lock".to_string(),
+                })?;
             if let Err(e) = cache.download_done(&path, size) {
                 tracing::error!("Failed to update cache: {}", e);
                 cache.download_failed(&path);
@@ -77,8 +82,12 @@ async fn handler(
         }
         Err(e) => {
             tracing::error!("Download failed for {}: {}", path, e);
-            let mut cache = state.cache_controller.write()
-                .map_err(|_| LithiumError::Cache { message: "Failed to acquire cache lock".to_string() })?;
+            let mut cache = state
+                .cache_controller
+                .write()
+                .map_err(|_| LithiumError::Cache {
+                    message: "Failed to acquire cache lock".to_string(),
+                })?;
             cache.download_failed(&path);
             return Err(e);
         }
@@ -89,7 +98,11 @@ async fn handler(
 }
 
 fn xaccel_redirect(internal_url: &str) -> axum::response::Response {
-    (StatusCode::OK, [("X-Accel-Redirect", internal_url.to_string())]).into_response()
+    (
+        StatusCode::OK,
+        [("X-Accel-Redirect", internal_url.to_string())],
+    )
+        .into_response()
 }
 
 impl IntoResponse for LithiumError {
@@ -98,11 +111,21 @@ impl IntoResponse for LithiumError {
             LithiumError::Download { message } => (StatusCode::BAD_GATEWAY, message),
             LithiumError::Http(_) => (StatusCode::BAD_GATEWAY, "HTTP error".to_string()),
             LithiumError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error".to_string()),
-            LithiumError::S3 { message } => (StatusCode::BAD_GATEWAY, format!("S3 error: {}", message)),
-            LithiumError::PathTraversal { path } => (StatusCode::BAD_REQUEST, format!("Path traversal detected: {}", path)),
-            LithiumError::InvalidPath { path } => (StatusCode::BAD_REQUEST, format!("Invalid path: {}", path)),
+            LithiumError::S3 { message } => {
+                (StatusCode::BAD_GATEWAY, format!("S3 error: {}", message))
+            }
+            LithiumError::PathTraversal { path } => (
+                StatusCode::BAD_REQUEST,
+                format!("Path traversal detected: {}", path),
+            ),
+            LithiumError::InvalidPath { path } => {
+                (StatusCode::BAD_REQUEST, format!("Invalid path: {}", path))
+            }
             LithiumError::Cache { message } => (StatusCode::INTERNAL_SERVER_ERROR, message),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
         };
         (status, message).into_response()
     }
@@ -151,10 +174,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(
-        format!("{}:{}", config.server.host, config.server.port)
-    ).await?;
-    tracing::info!("Server listening on {}:{}", config.server.host, config.server.port);
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", config.server.host, config.server.port))
+            .await?;
+    tracing::info!(
+        "Server listening on {}:{}",
+        config.server.host,
+        config.server.port
+    );
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

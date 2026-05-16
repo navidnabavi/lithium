@@ -1,13 +1,13 @@
 use crate::backend::StorageBackend;
 use crate::config::SweeperConfig;
 use crate::error::{LithiumError, Result};
-use std::sync::{Arc, RwLock, Mutex};
-use std::collections::{HashMap, BTreeMap, HashSet};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::task::JoinHandle;
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
 struct TimeUrl {
@@ -136,7 +136,10 @@ impl CacheController {
                 downloading.remove(url);
             }
             return Err(LithiumError::Download {
-                message: format!("File too large: {} bytes (max: {})", size, self.max_file_size)
+                message: format!(
+                    "File too large: {} bytes (max: {})",
+                    size, self.max_file_size
+                ),
             });
         }
 
@@ -157,7 +160,7 @@ impl CacheController {
                 downloading.remove(url);
             }
             Err(LithiumError::Cache {
-                message: format!("URL {} not found in cache", url)
+                message: format!("URL {} not found in cache", url),
             })
         }
     }
@@ -167,16 +170,32 @@ impl CacheController {
     }
 
     pub fn dump(&self) {
-        info!("Cache stats: {} entries, {} bytes", self.url_map.len(), self.size);
+        info!(
+            "Cache stats: {} entries, {} bytes",
+            self.url_map.len(),
+            self.size
+        );
         for (url, time_url) in &self.url_map {
-            debug!("  {}: {} bytes, accessed at {}", url, time_url.size, time_url.time);
+            debug!(
+                "  {}: {} bytes, accessed at {}",
+                url, time_url.size, time_url.time
+            );
         }
     }
 
-    fn sweep(&mut self, file_deleter: &UnboundedSender<String>, size_limit: usize, soft_limit_ratio: f64, max_delete_per_iteration: usize, sweep_interval_secs: u64) -> u64 {
+    fn sweep(
+        &mut self,
+        file_deleter: &UnboundedSender<String>,
+        size_limit: usize,
+        soft_limit_ratio: f64,
+        max_delete_per_iteration: usize,
+        sweep_interval_secs: u64,
+    ) -> u64 {
         let mut deleted = 0;
 
-        while deleted < max_delete_per_iteration && self.soft_limit_passed(size_limit, soft_limit_ratio) {
+        while deleted < max_delete_per_iteration
+            && self.soft_limit_passed(size_limit, soft_limit_ratio)
+        {
             if self.sweep_once(file_deleter) {
                 deleted += 1;
             } else {
@@ -192,7 +211,10 @@ impl CacheController {
     }
 
     fn get_oldest(&self) -> Option<(u64, String)> {
-        self.urls.iter().next().map(|((time, url), _)| (*time, url.clone()))
+        self.urls
+            .iter()
+            .next()
+            .map(|((time, url), _)| (*time, url.clone()))
     }
 
     fn sweep_once(&mut self, file_deleter: &UnboundedSender<String>) -> bool {
@@ -406,17 +428,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_sweeper_evicts_when_enabled() {
-        use bytes::Bytes;
         use crate::config::SweeperConfig;
+        use bytes::Bytes;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         struct NoopBackend;
 
         #[async_trait::async_trait]
         impl crate::backend::StorageBackend for NoopBackend {
-            async fn store(&self, _path: &str, _data: Bytes) -> crate::error::Result<usize> { Ok(0) }
-            async fn delete(&self, _path: &str) -> crate::error::Result<()> { Ok(()) }
-            fn accel_redirect_path(&self, path: &str) -> String { path.to_string() }
+            async fn store(&self, _path: &str, _data: Bytes) -> crate::error::Result<usize> {
+                Ok(0)
+            }
+            async fn delete(&self, _path: &str) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn accel_redirect_path(&self, path: &str) -> String {
+                path.to_string()
+            }
         }
 
         let cfg = SweeperConfig {

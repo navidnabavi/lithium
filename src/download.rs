@@ -74,7 +74,13 @@ mod tests {
     async fn test_download_file_rejects_traversal() {
         let client = reqwest::Client::new();
         let backend = MockBackend;
-        let result = download_file(&client, &backend, "https://example.com/file", "../etc/shadow").await;
+        let result = download_file(
+            &client,
+            &backend,
+            "https://example.com/file",
+            "../etc/shadow",
+        )
+        .await;
         assert!(result.is_err());
         match result.unwrap_err() {
             LithiumError::PathTraversal { path } => {
@@ -88,8 +94,12 @@ mod tests {
     async fn test_download_file_rejects_invalid_scheme() {
         let client = reqwest::Client::new();
         let backend = MockBackend;
-        let result = download_file(&client, &backend, "ftp://example.com/file", "/valid/path").await;
+        let result =
+            download_file(&client, &backend, "ftp://example.com/file", "/valid/path").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), LithiumError::InvalidPath { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            LithiumError::InvalidPath { .. }
+        ));
     }
 }

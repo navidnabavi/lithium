@@ -3,8 +3,8 @@ use aws_smithy_http::byte_stream::ByteStream;
 use aws_types::region::Region;
 use bytes::Bytes;
 
-use crate::error::{LithiumError, Result};
 use super::StorageBackend;
+use crate::error::{LithiumError, Result};
 
 pub struct S3Backend {
     client: aws_sdk_s3::Client,
@@ -53,7 +53,9 @@ impl StorageBackend for S3Backend {
             .body(body)
             .send()
             .await
-            .map_err(|e| LithiumError::S3 { message: e.to_string() })?;
+            .map_err(|e| LithiumError::S3 {
+                message: e.to_string(),
+            })?;
 
         Ok(data_len)
     }
@@ -67,7 +69,9 @@ impl StorageBackend for S3Backend {
             .key(key)
             .send()
             .await
-            .map_err(|e| LithiumError::S3 { message: e.to_string() })?;
+            .map_err(|e| LithiumError::S3 {
+                message: e.to_string(),
+            })?;
 
         Ok(())
     }
@@ -98,6 +102,9 @@ mod tests {
     #[test]
     fn test_accel_redirect_path() {
         let backend = make_backend();
-        assert_eq!(backend.accel_redirect_path("/foo/bar.jpg"), "/s3/foo/bar.jpg");
+        assert_eq!(
+            backend.accel_redirect_path("/foo/bar.jpg"),
+            "/s3/foo/bar.jpg"
+        );
     }
 }

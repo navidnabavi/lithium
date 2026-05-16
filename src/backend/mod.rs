@@ -27,10 +27,13 @@ pub trait StorageBackend: Send + Sync {
 /// Create a backend from config. Must be called inside a tokio runtime.
 pub async fn create_backend(config: &BackendConfig) -> Result<Arc<dyn StorageBackend>> {
     match config {
-        BackendConfig::File { base_dir } => {
-            Ok(Arc::new(FileBackend::new(base_dir.clone())))
-        }
-        BackendConfig::S3 { bucket, endpoint, region, accel_prefix } => {
+        BackendConfig::File { base_dir } => Ok(Arc::new(FileBackend::new(base_dir.clone()))),
+        BackendConfig::S3 {
+            bucket,
+            endpoint,
+            region,
+            accel_prefix,
+        } => {
             let backend = S3Backend::new(bucket, endpoint, region, accel_prefix).await?;
             Ok(Arc::new(backend))
         }
@@ -69,6 +72,9 @@ mod tests {
     #[tokio::test]
     async fn test_mock_backend_accel_redirect() {
         let backend = MockBackend;
-        assert_eq!(backend.accel_redirect_path("/foo/bar.jpg"), "/mock/foo/bar.jpg");
+        assert_eq!(
+            backend.accel_redirect_path("/foo/bar.jpg"),
+            "/mock/foo/bar.jpg"
+        );
     }
 }

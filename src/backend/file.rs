@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::path::PathBuf;
-use tracing::{info, error};
+use tracing::{error, info};
 
-use crate::error::{LithiumError, Result};
 use super::StorageBackend;
+use crate::error::{LithiumError, Result};
 
 pub struct FileBackend {
     pub base_dir: PathBuf,
@@ -33,14 +33,22 @@ impl StorageBackend for FileBackend {
 
         let size = data.len();
         tokio::fs::write(&full_path, data).await?;
-        info!("FileBackend: stored {} bytes at {}", size, full_path.display());
+        info!(
+            "FileBackend: stored {} bytes at {}",
+            size,
+            full_path.display()
+        );
         Ok(size)
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
         let full_path = self.full_path(path);
         tokio::fs::remove_file(&full_path).await.map_err(|e| {
-            error!("FileBackend: failed to delete {}: {}", full_path.display(), e);
+            error!(
+                "FileBackend: failed to delete {}: {}",
+                full_path.display(),
+                e
+            );
             LithiumError::Io(e)
         })?;
         info!("FileBackend: deleted {}", full_path.display());
@@ -66,7 +74,9 @@ mod tests {
         let size = backend.store("/subdir/test.txt", data).await.unwrap();
 
         assert_eq!(size, 13);
-        let stored = tokio::fs::read(dir.path().join("subdir/test.txt")).await.unwrap();
+        let stored = tokio::fs::read(dir.path().join("subdir/test.txt"))
+            .await
+            .unwrap();
         assert_eq!(stored, b"hello lithium");
     }
 
@@ -75,7 +85,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let backend = FileBackend::new(dir.path().to_path_buf());
 
-        backend.store("/a/b/c/file.bin", Bytes::from("x")).await.unwrap();
+        backend
+            .store("/a/b/c/file.bin", Bytes::from("x"))
+            .await
+            .unwrap();
 
         assert!(dir.path().join("a/b/c/file.bin").exists());
     }
@@ -85,7 +98,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let backend = FileBackend::new(dir.path().to_path_buf());
 
-        backend.store("/to_delete.txt", Bytes::from("data")).await.unwrap();
+        backend
+            .store("/to_delete.txt", Bytes::from("data"))
+            .await
+            .unwrap();
         assert!(dir.path().join("to_delete.txt").exists());
 
         backend.delete("/to_delete.txt").await.unwrap();
@@ -105,6 +121,9 @@ mod tests {
     #[test]
     fn test_accel_redirect_path() {
         let backend = FileBackend::new(PathBuf::from("/tmp/cache"));
-        assert_eq!(backend.accel_redirect_path("/images/cat.jpg"), "/files/images/cat.jpg");
+        assert_eq!(
+            backend.accel_redirect_path("/images/cat.jpg"),
+            "/files/images/cat.jpg"
+        );
     }
 }
