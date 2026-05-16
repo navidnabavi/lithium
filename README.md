@@ -1,15 +1,17 @@
 # Lithium
 
-A modern, secure cache-based file CDN written in Rust.
+A Rust proxy cache that sits behind nginx, serving files via `X-Accel-Redirect` with pluggable file or S3 storage backends and LRU eviction.
+
+Fits two roles: **top-level origin cache** between clients and upstream, or **L2 cache** between your servers and CDN to absorb expensive content-generation cost before CDN edge picks it up.
 
 ## Features
 
-- **High Performance**: Built with async/await and modern Rust
-- **Multi-Backend Storage**: File system or S3/MinIO, selected at runtime via config
-- **Secure**: Path traversal protection and input validation
-- **nginx offload**: Responds with `X-Accel-Redirect` — nginx serves bytes, Lithium stays lean
-- **Configurable**: TOML-based configuration
-- **Observable**: Comprehensive logging and metrics
+- **Dual deployment**: origin cache or L2 between server and CDN
+- **nginx offload**: responds with `X-Accel-Redirect` — nginx serves bytes, Lithium stays lean
+- **Multi-backend storage**: file system or S3/MinIO, selected at runtime via config
+- **LRU eviction**: configurable soft-limit sweeper with optional disable
+- **Secure**: path traversal protection on all incoming paths
+- **Configurable**: TOML-based, sane defaults, minimal required fields
 
 ## Quick Start
 
