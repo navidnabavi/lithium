@@ -119,10 +119,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let backend = create_backend(&config.backend).await?;
 
     let cache_controller = Arc::new(RwLock::new(CacheController::new(
-        config.cache.size_limit,
-        config.cache.soft_limit_ratio,
-        config.cache.sweep_interval_secs,
-        config.cache.max_delete_per_iteration,
+        config.sweeper.size_limit,
+        config.sweeper.soft_limit_ratio,
+        config.sweeper.sweep_interval_secs,
+        config.sweeper.max_delete_per_iteration,
         config.cache.max_file_size,
     )));
 
