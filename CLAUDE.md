@@ -5,11 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-cargo build --release       # production build
-cargo run                   # run with lithium.toml config
-cargo test                  # run all tests
-cargo test cache            # run specific test by name filter
-RUST_LOG=debug cargo run    # run with debug logging
+cargo build --release                      # production build
+cargo run                                  # run with lithium.toml config
+cargo test                                 # run all tests
+cargo test cache                           # run specific test by name filter
+RUST_LOG=debug cargo run                   # run with debug logging
+cargo clippy --all-targets -- -D warnings  # lint (must use --all-targets; tests use methods missed otherwise)
 ```
 
 ## Architecture
@@ -38,4 +39,6 @@ Lithium is a proxy cache CDN: requests come in, server checks in-memory cache, f
 
 ## Configuration
 
-`lithium.toml` at project root. All fields required when file exists — no partial overrides. `max_file_size` must be ≤ `size_limit`. For S3, `accel_prefix` must be non-empty.
+`lithium.toml` at project root. `[sweeper]` fields have defaults and are optional when `enabled = false`. `max_file_size` must be ≤ `sweeper.size_limit` when sweeper enabled. For S3, `accel_prefix` must be non-empty.
+
+Top-level `base_url` is required. `[cache]` only holds `max_file_size` — all eviction config lives in `[sweeper]`.

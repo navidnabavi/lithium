@@ -43,18 +43,21 @@ The application can be configured via `lithium.toml`:
 ### File backend (default)
 
 ```toml
+base_url = "https://example.com"
+
 [server]
 host = "0.0.0.0"
 port = 9999
 
 [cache]
-size_limit = 100000000  # 100MB
+max_file_size = 10000000  # 10MB
+
+[sweeper]
+enabled = true
+size_limit = 100000000     # 100MB
 soft_limit_ratio = 0.85
 sweep_interval_secs = 10
 max_delete_per_iteration = 100
-max_file_size = 10000000  # 10MB
-
-base_url = "https://example.com"
 
 [backend]
 type = "file"
@@ -64,18 +67,21 @@ base_dir = "/tmp/lithium-cache"
 ### S3/MinIO backend
 
 ```toml
+base_url = "https://example.com"
+
 [server]
 host = "0.0.0.0"
 port = 9999
 
 [cache]
+max_file_size = 10000000  # 10MB
+
+[sweeper]
+enabled = true
 size_limit = 100000000
 soft_limit_ratio = 0.85
 sweep_interval_secs = 10
 max_delete_per_iteration = 100
-max_file_size = 10000000
-
-base_url = "https://example.com"
 
 [backend]
 type = "s3"
@@ -83,6 +89,13 @@ bucket = "my-bucket"
 endpoint = "https://s3.us-east-1.amazonaws.com"
 region = "us-east-1"
 accel_prefix = "/s3-internal"
+```
+
+### Disable sweeper (unbounded cache)
+
+```toml
+[sweeper]
+enabled = false
 ```
 
 S3 credentials are read from environment variables — not stored in `lithium.toml`:
