@@ -3,11 +3,14 @@ host = "0.0.0.0"
 port = 9999
 
 [cache]
+max_file_size = 10000000  # 10MB per file
+
+[sweeper]
+enabled = true
 size_limit = 100000000  # 100MB
 soft_limit_ratio = 0.85
 sweep_interval_secs = 10
 max_delete_per_iteration = 100
-max_file_size = 10000000  # 10MB per file
 
 base_url = "https://divar.ir"
 
