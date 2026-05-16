@@ -20,9 +20,6 @@ pub enum LithiumError {
     #[error("Path traversal detected: {path}")]
     PathTraversal { path: String },
 
-    #[error("File not found: {path}")]
-    FileNotFound { path: String },
-
     #[error("Cache error: {message}")]
     Cache { message: String },
 

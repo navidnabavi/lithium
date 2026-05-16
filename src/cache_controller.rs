@@ -61,7 +61,7 @@ impl CacheController {
 
     pub fn access(&mut self, url: &str) -> HitMiss {
         // Check if already in cache
-        if self.url_map.get(url).is_some() {
+        if self.url_map.contains_key(url) {
             return self.update(url);
         }
 
@@ -165,6 +165,7 @@ impl CacheController {
         }
     }
 
+    #[cfg(test)]
     pub fn stats(&self) -> (usize, usize) {
         (self.url_map.len(), self.size)
     }
@@ -244,10 +245,6 @@ impl CacheController {
 
     pub fn soft_limit_passed(&self, size_limit: usize, soft_limit_ratio: f64) -> bool {
         self.size > (size_limit as f64 * soft_limit_ratio) as usize
-    }
-
-    pub fn hard_limit_passed(&self, size_limit: usize) -> bool {
-        self.size > size_limit
     }
 }
 
