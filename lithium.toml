@@ -3,6 +3,7 @@ url = "https://divar.ir"
 timeout_secs = 30
 connect_timeout_secs = 10
 max_retries = 0
+retry_backoff_ms = 200            # base delay multiplied by attempt number
 user_agent = "lithium/1.0"
 follow_redirects = true
 max_redirects = 10

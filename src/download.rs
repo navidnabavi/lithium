@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use path_clean::PathClean;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::info;
 use url::Url;
 
@@ -13,6 +14,7 @@ pub async fn download_file(
     url: &str,
     path: &str,
     max_retries: u32,
+    retry_backoff_ms: u64,
 ) -> Result<usize> {
     // Validate URL scheme
     let parsed_url = Url::parse(url)?;
@@ -63,13 +65,14 @@ pub async fn download_file(
                     attempt,
                     max_retries
                 );
+                tokio::time::sleep(Duration::from_millis(retry_backoff_ms * attempt as u64)).await;
             }
             Ok(response) => {
                 return Err(LithiumError::Download {
                     message: format!("HTTP error: {}", response.status()),
                 });
             }
-            Err(e) if e.is_timeout() || e.is_connect() && attempt < max_retries => {
+            Err(e) if (e.is_timeout() || e.is_connect()) && attempt < max_retries => {
                 attempt += 1;
                 tracing::warn!(
                     "Network error for {}: {}, retrying ({}/{})",
@@ -78,6 +81,7 @@ pub async fn download_file(
                     attempt,
                     max_retries
                 );
+                tokio::time::sleep(Duration::from_millis(retry_backoff_ms * attempt as u64)).await;
             }
             Err(e) => return Err(e.into()),
         }
@@ -114,6 +118,7 @@ mod tests {
             "https://example.com/file",
             "../etc/shadow",
             0,
+            0,
         )
         .await;
         assert!(result.is_err());
@@ -130,7 +135,7 @@ mod tests {
         let client = reqwest::Client::new();
         let backend = MockBackend;
         let result =
-            download_file(&client, &backend, "ftp://example.com/file", "/valid/path", 0).await;
+            download_file(&client, &backend, "ftp://example.com/file", "/valid/path", 0, 0).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

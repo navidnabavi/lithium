@@ -71,6 +71,7 @@ async fn handler(
         &download_url,
         &path,
         state.config.upstream.max_retries,
+        state.config.upstream.retry_backoff_ms,
     )
     .await
     {
@@ -179,7 +180,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         ))
         .user_agent(&config.upstream.user_agent)
         .redirect(redirect_policy)
-        .connection_verbose(false)
         .pool_max_idle_per_host(config.upstream.pool_max_idle_per_host);
 
     if let Some(keepalive_secs) = config.upstream.tcp_keepalive_secs {

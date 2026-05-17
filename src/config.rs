@@ -45,6 +45,8 @@ pub struct UpstreamConfig {
     pub pool_max_idle_per_host: usize,
     #[serde(default)]
     pub tcp_keepalive_secs: Option<u64>,
+    #[serde(default = "default_retry_backoff_ms")]
+    pub retry_backoff_ms: u64,
 }
 
 impl Default for UpstreamConfig {
@@ -60,6 +62,7 @@ impl Default for UpstreamConfig {
             extra_headers: HashMap::new(),
             pool_max_idle_per_host: default_pool_max_idle_per_host(),
             tcp_keepalive_secs: None,
+            retry_backoff_ms: default_retry_backoff_ms(),
         }
     }
 }
@@ -78,6 +81,9 @@ fn default_max_redirects() -> usize {
 }
 fn default_pool_max_idle_per_host() -> usize {
     10
+}
+fn default_retry_backoff_ms() -> u64 {
+    200
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +120,7 @@ pub struct SweeperConfig {
     pub max_delete_per_iteration: usize,
 }
 
-pub fn default_true() -> bool {
+fn default_true() -> bool {
     true
 }
 fn default_size_limit() -> usize {
@@ -241,6 +247,7 @@ mod tests {
         assert!(config.upstream.extra_headers.is_empty());
         assert_eq!(config.upstream.pool_max_idle_per_host, 10);
         assert!(config.upstream.tcp_keepalive_secs.is_none());
+        assert_eq!(config.upstream.retry_backoff_ms, 200);
         assert!(matches!(config.backend, BackendConfig::File { .. }));
     }
 
