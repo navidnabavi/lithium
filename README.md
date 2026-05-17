@@ -51,6 +51,7 @@ url = "https://example.com"       # required: origin to fetch from
 timeout_secs = 30                 # total request timeout
 connect_timeout_secs = 10         # TCP connection timeout
 max_retries = 0                   # retry on 5xx / network error
+retry_backoff_ms = 200            # base delay per retry, multiplied by attempt number
 user_agent = "lithium/1.0"
 follow_redirects = true
 max_redirects = 10

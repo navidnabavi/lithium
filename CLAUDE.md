@@ -41,4 +41,4 @@ Lithium is a proxy cache CDN: requests come in, server checks in-memory cache, f
 
 `lithium.toml` at project root. `[sweeper]` fields have defaults and are optional when `enabled = false`. `max_file_size` must be ≤ `sweeper.size_limit` when sweeper enabled. For S3, `accel_prefix` must be non-empty.
 
-`[upstream] url` is required. All HTTP client tuning (timeouts, retries, user-agent, redirect policy, connection pool, keepalive, extra headers) lives in `[upstream]`. `[cache]` only holds `max_file_size` — all eviction config lives in `[sweeper]`.
+`[upstream] url` is required. All HTTP client tuning (timeouts, retries, retry backoff, user-agent, redirect policy, connection pool, keepalive, extra headers) lives in `[upstream]`. `retry_backoff_ms` is applied as `backoff * attempt` (linear). `[cache]` only holds `max_file_size` — all eviction config lives in `[sweeper]`.
