@@ -1,4 +1,15 @@
-base_url = "https://divar.ir"
+[upstream]
+url = "https://divar.ir"
+timeout_secs = 30
+connect_timeout_secs = 10
+max_retries = 0
+user_agent = "lithium/1.0"
+follow_redirects = true
+max_redirects = 10
+pool_max_idle_per_host = 10
+# tcp_keepalive_secs = 60
+# [upstream.extra_headers]
+# Authorization = "Bearer <token>"
 
 [server]
 host = "0.0.0.0"

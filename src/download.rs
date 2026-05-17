@@ -12,6 +12,7 @@ pub async fn download_file(
     backend: &dyn StorageBackend,
     url: &str,
     path: &str,
+    max_retries: u32,
 ) -> Result<usize> {
     // Validate URL scheme
     let parsed_url = Url::parse(url)?;
@@ -33,21 +34,54 @@ pub async fn download_file(
         });
     }
 
-    info!("Downloading {} → backend path {}", url, path);
+    let mut attempt = 0u32;
+    loop {
+        info!(
+            "Downloading {} → backend path {} (attempt {}/{})",
+            url,
+            path,
+            attempt + 1,
+            max_retries + 1
+        );
 
-    let response = client.get(url).send().await?;
+        let result = client.get(url).send().await;
 
-    if !response.status().is_success() {
-        return Err(LithiumError::Download {
-            message: format!("HTTP error: {}", response.status()),
-        });
+        match result {
+            Ok(response) if response.status().is_success() => {
+                let bytes: Bytes = response.bytes().await?;
+                let size = backend.store(path, bytes).await?;
+                info!("Downloaded and stored {} bytes at {}", size, path);
+                return Ok(size);
+            }
+            Ok(response) if response.status().is_server_error() && attempt < max_retries => {
+                let status = response.status();
+                attempt += 1;
+                tracing::warn!(
+                    "Upstream returned {} for {}, retrying ({}/{})",
+                    status,
+                    url,
+                    attempt,
+                    max_retries
+                );
+            }
+            Ok(response) => {
+                return Err(LithiumError::Download {
+                    message: format!("HTTP error: {}", response.status()),
+                });
+            }
+            Err(e) if e.is_timeout() || e.is_connect() && attempt < max_retries => {
+                attempt += 1;
+                tracing::warn!(
+                    "Network error for {}: {}, retrying ({}/{})",
+                    url,
+                    e,
+                    attempt,
+                    max_retries
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
-
-    let bytes: Bytes = response.bytes().await?;
-    let size = backend.store(path, bytes).await?;
-
-    info!("Downloaded and stored {} bytes at {}", size, path);
-    Ok(size)
 }
 
 #[cfg(test)]
@@ -79,6 +113,7 @@ mod tests {
             &backend,
             "https://example.com/file",
             "../etc/shadow",
+            0,
         )
         .await;
         assert!(result.is_err());
@@ -95,7 +130,7 @@ mod tests {
         let client = reqwest::Client::new();
         let backend = MockBackend;
         let result =
-            download_file(&client, &backend, "ftp://example.com/file", "/valid/path").await;
+            download_file(&client, &backend, "ftp://example.com/file", "/valid/path", 0).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

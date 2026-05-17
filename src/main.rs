@@ -63,9 +63,17 @@ async fn handler(
     }
 
     // Download and store via backend
-    let download_url = format!("{}{}", state.config.base_url, path);
+    let download_url = format!("{}{}", state.config.upstream.url, path);
 
-    match download_file(&state.client, state.backend.as_ref(), &download_url, &path).await {
+    match download_file(
+        &state.client,
+        state.backend.as_ref(),
+        &download_url,
+        &path,
+        state.config.upstream.max_retries,
+    )
+    .await
+    {
         Ok(size) => {
             let mut cache = state
                 .cache_controller
@@ -158,9 +166,38 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    let redirect_policy = if config.upstream.follow_redirects {
+        reqwest::redirect::Policy::limited(config.upstream.max_redirects)
+    } else {
+        reqwest::redirect::Policy::none()
+    };
+
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(config.upstream.timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(
+            config.upstream.connect_timeout_secs,
+        ))
+        .user_agent(&config.upstream.user_agent)
+        .redirect(redirect_policy)
+        .connection_verbose(false)
+        .pool_max_idle_per_host(config.upstream.pool_max_idle_per_host);
+
+    if let Some(keepalive_secs) = config.upstream.tcp_keepalive_secs {
+        client_builder = client_builder
+            .tcp_keepalive(std::time::Duration::from_secs(keepalive_secs));
+    }
+
+    if !config.upstream.extra_headers.is_empty() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (key, value) in &config.upstream.extra_headers {
+            let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
+            let header_value = reqwest::header::HeaderValue::from_str(value)?;
+            headers.insert(header_name, header_value);
+        }
+        client_builder = client_builder.default_headers(headers);
+    }
+
+    let client = client_builder.build()?;
 
     let state = AppState {
         cache_controller,

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,11 +25,67 @@ impl Default for BackendConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamConfig {
+    pub url: String,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    #[serde(default)]
+    pub max_retries: u32,
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
+    #[serde(default = "default_true")]
+    pub follow_redirects: bool,
+    #[serde(default = "default_max_redirects")]
+    pub max_redirects: usize,
+    #[serde(default)]
+    pub extra_headers: HashMap<String, String>,
+    #[serde(default = "default_pool_max_idle_per_host")]
+    pub pool_max_idle_per_host: usize,
+    #[serde(default)]
+    pub tcp_keepalive_secs: Option<u64>,
+}
+
+impl Default for UpstreamConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            timeout_secs: default_timeout_secs(),
+            connect_timeout_secs: default_connect_timeout_secs(),
+            max_retries: 0,
+            user_agent: default_user_agent(),
+            follow_redirects: true,
+            max_redirects: default_max_redirects(),
+            extra_headers: HashMap::new(),
+            pool_max_idle_per_host: default_pool_max_idle_per_host(),
+            tcp_keepalive_secs: None,
+        }
+    }
+}
+
+fn default_timeout_secs() -> u64 {
+    30
+}
+fn default_connect_timeout_secs() -> u64 {
+    10
+}
+fn default_user_agent() -> String {
+    "lithium/1.0".to_string()
+}
+fn default_max_redirects() -> usize {
+    10
+}
+fn default_pool_max_idle_per_host() -> usize {
+    10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
     pub cache: CacheConfig,
     pub sweeper: SweeperConfig,
-    pub base_url: String,
+    pub upstream: UpstreamConfig,
     pub backend: BackendConfig,
 }
 
@@ -57,7 +114,7 @@ pub struct SweeperConfig {
     pub max_delete_per_iteration: usize,
 }
 
-fn default_true() -> bool {
+pub fn default_true() -> bool {
     true
 }
 fn default_size_limit() -> usize {
@@ -96,7 +153,10 @@ impl Default for Config {
                 max_file_size: 10_000_000,
             },
             sweeper: SweeperConfig::default(),
-            base_url: "https://divar.ir".to_string(),
+            upstream: UpstreamConfig {
+                url: "https://divar.ir".to_string(),
+                ..UpstreamConfig::default()
+            },
             backend: BackendConfig::default(),
         }
     }
@@ -120,8 +180,16 @@ impl Config {
         if self.server.port == 0 {
             return Err(anyhow::anyhow!("Port must be greater than 0"));
         }
-        if self.base_url.is_empty() {
-            return Err(anyhow::anyhow!("Base URL cannot be empty"));
+        if self.upstream.url.is_empty() {
+            return Err(anyhow::anyhow!("Upstream URL cannot be empty"));
+        }
+        if self.upstream.timeout_secs == 0 {
+            return Err(anyhow::anyhow!("Upstream timeout must be greater than 0"));
+        }
+        if self.upstream.connect_timeout_secs == 0 {
+            return Err(anyhow::anyhow!(
+                "Upstream connect timeout must be greater than 0"
+            ));
         }
         if let BackendConfig::S3 { accel_prefix, .. } = &self.backend {
             if accel_prefix.is_empty() {
@@ -163,7 +231,16 @@ mod tests {
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 9999);
         assert_eq!(config.sweeper.size_limit, 100_000_000);
-        assert_eq!(config.base_url, "https://divar.ir");
+        assert_eq!(config.upstream.url, "https://divar.ir");
+        assert_eq!(config.upstream.timeout_secs, 30);
+        assert_eq!(config.upstream.connect_timeout_secs, 10);
+        assert_eq!(config.upstream.max_retries, 0);
+        assert_eq!(config.upstream.user_agent, "lithium/1.0");
+        assert!(config.upstream.follow_redirects);
+        assert_eq!(config.upstream.max_redirects, 10);
+        assert!(config.upstream.extra_headers.is_empty());
+        assert_eq!(config.upstream.pool_max_idle_per_host, 10);
+        assert!(config.upstream.tcp_keepalive_secs.is_none());
         assert!(matches!(config.backend, BackendConfig::File { .. }));
     }
 
@@ -202,7 +279,8 @@ mod tests {
     #[test]
     fn test_full_config_with_sweeper_section() {
         let toml_str = r#"
-            base_url = "https://example.com"
+            [upstream]
+            url = "https://example.com"
 
             [server]
             host = "127.0.0.1"
@@ -226,6 +304,7 @@ mod tests {
         assert_eq!(config.cache.max_file_size, 10_000_000);
         assert!(config.sweeper.enabled);
         assert_eq!(config.sweeper.size_limit, 100_000_000);
+        assert_eq!(config.upstream.url, "https://example.com");
         assert!(config.validate().is_ok());
     }
 
