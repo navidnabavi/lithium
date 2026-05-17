@@ -134,8 +134,15 @@ mod tests {
     async fn test_download_file_rejects_invalid_scheme() {
         let client = reqwest::Client::new();
         let backend = MockBackend;
-        let result =
-            download_file(&client, &backend, "ftp://example.com/file", "/valid/path", 0, 0).await;
+        let result = download_file(
+            &client,
+            &backend,
+            "ftp://example.com/file",
+            "/valid/path",
+            0,
+            0,
+        )
+        .await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

@@ -183,8 +183,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .pool_max_idle_per_host(config.upstream.pool_max_idle_per_host);
 
     if let Some(keepalive_secs) = config.upstream.tcp_keepalive_secs {
-        client_builder = client_builder
-            .tcp_keepalive(std::time::Duration::from_secs(keepalive_secs));
+        client_builder =
+            client_builder.tcp_keepalive(std::time::Duration::from_secs(keepalive_secs));
     }
 
     if !config.upstream.extra_headers.is_empty() {
