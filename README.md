@@ -12,6 +12,7 @@ Fits two roles: **top-level origin cache** between clients and upstream, or **L2
 - **LRU eviction**: configurable soft-limit sweeper with optional disable
 - **Secure**: path traversal protection on all incoming paths
 - **Configurable**: TOML-based, sane defaults, minimal required fields
+- **Upstream control**: per-request timeout, connect timeout, retries, user-agent, redirect policy, connection pool, keepalive, and custom headers
 
 ## Quick Start
 
@@ -45,7 +46,18 @@ The application can be configured via `lithium.toml`:
 ### File backend (default)
 
 ```toml
-base_url = "https://example.com"
+[upstream]
+url = "https://example.com"       # required: origin to fetch from
+timeout_secs = 30                 # total request timeout
+connect_timeout_secs = 10         # TCP connection timeout
+max_retries = 0                   # retry on 5xx / network error
+user_agent = "lithium/1.0"
+follow_redirects = true
+max_redirects = 10
+pool_max_idle_per_host = 10
+# tcp_keepalive_secs = 60
+# [upstream.extra_headers]
+# Authorization = "Bearer <token>"
 
 [server]
 host = "0.0.0.0"
@@ -69,7 +81,8 @@ base_dir = "/tmp/lithium-cache"
 ### S3/MinIO backend
 
 ```toml
-base_url = "https://example.com"
+[upstream]
+url = "https://example.com"
 
 [server]
 host = "0.0.0.0"
@@ -112,7 +125,7 @@ export AWS_SECRET_ACCESS_KEY=...
 The server acts as a proxy cache. Requests to `http://localhost:9999/path/to/file` will:
 
 1. Check if the file is already cached
-2. If not, download it from `base_url + /path/to/file`
+2. If not, download it from `upstream.url + /path/to/file`
 3. Cache it locally and serve it via X-Accel-Redirect
 
 ## Security
@@ -161,7 +174,7 @@ cargo test cache_controller
 Once the server is running on port 9999, test with curl:
 
 ```bash
-# Request a file (cache miss → downloads from base_url, returns X-Accel-Redirect)
+# Request a file (cache miss → downloads from upstream.url, returns X-Accel-Redirect)
 curl -v http://localhost:9999/path/to/file
 
 # Second request (cache hit)

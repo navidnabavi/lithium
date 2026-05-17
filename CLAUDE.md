@@ -15,7 +15,7 @@ cargo clippy --all-targets -- -D warnings  # lint (must use --all-targets; tests
 
 ## Architecture
 
-Lithium is a proxy cache CDN: requests come in, server checks in-memory cache, fetches from `base_url` if miss, stores via the configured backend, responds with `X-Accel-Redirect` header (nginx handles actual file serving — never 3xx redirects).
+Lithium is a proxy cache CDN: requests come in, server checks in-memory cache, fetches from `upstream.url` if miss, stores via the configured backend, responds with `X-Accel-Redirect` header (nginx handles actual file serving — never 3xx redirects).
 
 **Request flow:**
 1. `main.rs` handler receives `/*path`
@@ -29,8 +29,8 @@ Lithium is a proxy cache CDN: requests come in, server checks in-memory cache, f
 - `backend/file.rs` — `FileBackend`: writes to `base_dir`, serves via `/files<path>`.
 - `backend/s3.rs` — `S3Backend`: PutObject/DeleteObject, serves via configurable `accel_prefix` (e.g. `/s3-internal`). Credentials via env vars (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`).
 - `cache_controller.rs` — in-memory LRU-like cache using `BTreeMap<(u64, String), ()>` composite key + `HashMap<url, TimeUrl>`. `Sweeper` runs two tokio tasks: one sweeps evictions, one calls `backend.delete()` via unbounded channel.
-- `download.rs` — async reqwest download with path traversal validation (`path_clean` + `ParentDir` check). Backend-agnostic: calls `backend.store()`.
-- `config.rs` — TOML config loaded from `lithium.toml`; falls back to defaults if file missing. `BackendConfig` enum selects backend at runtime via `[backend] type = "file"|"s3"`.
+- `download.rs` — async reqwest download with path traversal validation (`path_clean` + `ParentDir` check). Retries on 5xx/network errors up to `upstream.max_retries`. Backend-agnostic: calls `backend.store()`.
+- `config.rs` — TOML config loaded from `lithium.toml`; falls back to defaults if file missing. `UpstreamConfig` holds origin URL + HTTP client settings. `BackendConfig` enum selects backend at runtime via `[backend] type = "file"|"s3"`.
 - `error.rs` — `LithiumError` enum with `thiserror`; maps to HTTP status codes in `IntoResponse` impl.
 
 **Concurrency model:** `AppState` holds `Arc<RwLock<CacheController>>`. Write lock acquired per request for cache mutations. `downloading` set inside `CacheController` is `Arc<Mutex<HashSet>>` — tracks in-flight downloads to return `Downloading` instead of duplicate miss. `Sweeper` uses `tokio::sync::mpsc::unbounded_channel` (not std) so `backend.delete()` can be awaited.
@@ -41,4 +41,4 @@ Lithium is a proxy cache CDN: requests come in, server checks in-memory cache, f
 
 `lithium.toml` at project root. `[sweeper]` fields have defaults and are optional when `enabled = false`. `max_file_size` must be ≤ `sweeper.size_limit` when sweeper enabled. For S3, `accel_prefix` must be non-empty.
 
-Top-level `base_url` is required. `[cache]` only holds `max_file_size` — all eviction config lives in `[sweeper]`.
+`[upstream] url` is required. All HTTP client tuning (timeouts, retries, user-agent, redirect policy, connection pool, keepalive, extra headers) lives in `[upstream]`. `[cache]` only holds `max_file_size` — all eviction config lives in `[sweeper]`.
